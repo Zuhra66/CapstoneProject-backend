@@ -1,18 +1,20 @@
-// index.js
-import express from "express";
-import cors from "cors";
-import dotenv from "dotenv";
-dotenv.config();
-
+const express = require('express');
+const cors = require('cors');
 const app = express();
-app.use(cors({ origin: process.env.ALLOWED_ORIGINS?.split(",") || "*" }));
+const PORT = process.env.PORT || 5000;
+
+app.use(cors()); // Allow frontend requests
 app.use(express.json());
 
-app.get("/health", (req, res) => res.json({ ok: true }));
+app.get('/', (req, res) => {
+  res.send('Backend is running');
+});
 
-// example API route
-app.get("/api/hello", (req, res) => res.json({ message: "Backend up!" }));
+// Example endpoint for your frontend
+app.get('/endpoint', (req, res) => {
+  res.json({ message: "WOW!! Good day - my backend is talking to my frontend 😄" });
+});
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`API listening on port ${PORT}`));
-
+app.listen(PORT, () =>
+    console.log(`Server running on http://localhost:${PORT}`)
+);
