@@ -1,7 +1,6 @@
 {
   "name": "capstoneproject-backend",
   "version": "1.0.0",
-  "type": "commonjs",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -9,7 +8,9 @@
     "dev": "nodemon index.js"
   },
   "dependencies": {
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
+    "csurf": "^1.11.0",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "helmet": "^8.1.0",
