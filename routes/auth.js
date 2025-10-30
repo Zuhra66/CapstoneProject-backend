@@ -40,11 +40,14 @@ router.post('/login', async (req, res) => {
   res.json({ success: true });
 });
 
-// Auth0 token verification
+// Profile route (requires JWT)
 router.get('/profile', authCheck, async (req, res) => {
   const email = req.user?.email;
   if (!email) return res.status(400).json({ error: 'Missing email in token' });
-  const user = await pool.query('SELECT id, email, provider, created_at FROM users WHERE email=$1', [email]);
+  const user = await pool.query(
+      'SELECT id, email, provider, created_at FROM users WHERE email=$1',
+      [email]
+  );
   res.json({ authenticated: true, user: user.rows[0] || { email } });
 });
 
@@ -54,7 +57,7 @@ router.post('/logout', (req, res) => {
   res.json({ success: true });
 });
 
-// Optional: Dummy Google route to stop 404
+// Dummy Auth0 Google route (just for reference)
 router.get('/google', (req, res) => {
   res.status(200).send('Use frontend Auth0 login at ' + process.env.FRONTEND_URL);
 });
