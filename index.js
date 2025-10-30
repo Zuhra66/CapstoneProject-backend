@@ -47,7 +47,6 @@ const csrfProtection = csrf({
     secure: process.env.NODE_ENV === 'production'
   }
 });
-
 app.use(csrfProtection);
 
 app.get('/csrf-token', (req, res) => {
@@ -57,9 +56,10 @@ app.get('/csrf-token', (req, res) => {
 // Routes
 app.use('/auth', authRoutes);
 
+// Health check
 app.get('/', (req, res) => res.send('EmpowerMed backend running securely'));
 
-// DB check
+// Database connection check
 pool.query('SELECT NOW()', (err, r) => {
   if (err) console.error('Database connection error:', err);
   else console.log('Database connected:', r.rows[0]);
