@@ -1,38 +1,45 @@
-// index.js
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const csrf = require('csurf');
-const passport = require('./middleware/passport-setup');
 const authRoutes = require('./routes/auth');
 const pool = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(helmet({
-  contentSecurityPolicy: false,
-  crossOriginEmbedderPolicy: false
-}));
+// Security
+app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginEmbedderPolicy: false
+    })
+);
+
+// JSON + Cookies
 app.use(express.json());
 app.use(cookieParser());
 
+// CORS
 const allowedOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   process.env.FRONTEND_URL
 ];
 
-app.use(cors({
-  origin(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) callback(null, true);
-    else callback(new Error('Not allowed by CORS'));
-  },
-  credentials: true
-}));
+app.use(
+    cors({
+      origin(origin, callback) {
+        if (!origin || allowedOrigins.includes(origin)) callback(null, true);
+        else callback(new Error('Not allowed by CORS'));
+      },
+      credentials: true
+    })
+);
 
+// CSRF protection
 const csrfProtection = csrf({
   cookie: {
     httpOnly: true,
@@ -47,11 +54,12 @@ app.get('/csrf-token', (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
 
-app.use(passport.initialize());
+// Routes
 app.use('/auth', authRoutes);
 
 app.get('/', (req, res) => res.send('EmpowerMed backend running securely'));
 
+// DB check
 pool.query('SELECT NOW()', (err, r) => {
   if (err) console.error('Database connection error:', err);
   else console.log('Database connected:', r.rows[0]);
