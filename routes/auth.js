@@ -1,4 +1,3 @@
-// routes/auth.js
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
@@ -17,7 +16,7 @@ const createJwtAndSetCookie = (res, payload) => {
   });
 };
 
-// Local signup (optional)
+// Local signup
 router.post('/signup', async (req, res) => {
   const { email, password } = req.body;
   const hashed = await bcrypt.hash(password, 12);
@@ -29,7 +28,7 @@ router.post('/signup', async (req, res) => {
   res.json({ success: true });
 });
 
-// Local login (optional)
+// Local login
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
   const result = await pool.query('SELECT id, email, password_hash FROM users WHERE email=$1', [email]);
@@ -41,7 +40,7 @@ router.post('/login', async (req, res) => {
   res.json({ success: true });
 });
 
-// Auth0 token verification example route
+// Auth0 token verification
 router.get('/profile', authCheck, async (req, res) => {
   const email = req.user?.email;
   if (!email) return res.status(400).json({ error: 'Missing email in token' });
@@ -49,9 +48,15 @@ router.get('/profile', authCheck, async (req, res) => {
   res.json({ authenticated: true, user: user.rows[0] || { email } });
 });
 
+// Logout
 router.post('/logout', (req, res) => {
   res.clearCookie('token');
   res.json({ success: true });
+});
+
+// Optional: Dummy Google route to stop 404
+router.get('/google', (req, res) => {
+  res.status(200).send('Use frontend Auth0 login at ' + process.env.FRONTEND_URL);
 });
 
 module.exports = router;
