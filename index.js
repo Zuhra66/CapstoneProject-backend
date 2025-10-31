@@ -14,7 +14,7 @@ const PORT = process.env.PORT || 5000;
 app.use(
     helmet({
       contentSecurityPolicy: false,
-      crossOriginEmbedderPolicy: false
+      crossOriginEmbedderPolicy: false,
     })
 );
 
@@ -25,17 +25,16 @@ app.use(cookieParser());
 // CORS
 const allowedOrigins = [
   'http://localhost:5173',
-  'http://127.0.0.1:5173',
-  process.env.FRONTEND_URL
+  process.env.VITE_FRONTEND_URL || 'https://empowermed-frontend.onrender.com',
 ];
 
 app.use(
     cors({
-      origin(origin, callback) {
+      origin: (origin, callback) => {
         if (!origin || allowedOrigins.includes(origin)) callback(null, true);
         else callback(new Error('Not allowed by CORS'));
       },
-      credentials: true
+      credentials: true,
     })
 );
 
@@ -44,11 +43,13 @@ const csrfProtection = csrf({
   cookie: {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production'
-  }
+    secure: process.env.NODE_ENV === 'production',
+  },
 });
+
 app.use(csrfProtection);
 
+// CSRF token endpoint
 app.get('/csrf-token', (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
@@ -57,9 +58,9 @@ app.get('/csrf-token', (req, res) => {
 app.use('/auth', authRoutes);
 
 // Health check
-app.get('/', (req, res) => res.send('EmpowerMed backend running securely'));
+app.get('/', (req, res) => res.send('EmpowerMed backend running'));
 
-// Database connection check
+// DB check
 pool.query('SELECT NOW()', (err, r) => {
   if (err) console.error('Database connection error:', err);
   else console.log('Database connected:', r.rows[0]);
