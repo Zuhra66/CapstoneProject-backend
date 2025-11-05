@@ -4,13 +4,14 @@ const cors = require('cors');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const csrf = require('csurf');
+
 const authRoutes = require('./routes/auth');
 const pool = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Security
+// Security headers
 app.use(
     helmet({
       contentSecurityPolicy: false,
@@ -60,10 +61,11 @@ app.use('/auth', authRoutes);
 // Health check
 app.get('/', (req, res) => res.send('EmpowerMed backend running'));
 
-// DB check
-pool.query('SELECT NOW()', (err, r) => {
+// Database connection check
+pool.query('SELECT NOW()', (err, result) => {
   if (err) console.error('Database connection error:', err);
-  else console.log('Database connected:', r.rows[0]);
+  else console.log('Database connected:', result.rows[0]);
 });
 
+// Start server
 app.listen(PORT, () => console.log(`Secure server running on port ${PORT}`));
