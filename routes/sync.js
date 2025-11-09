@@ -10,17 +10,20 @@ router.post('/sync-user', async (req, res) => {
     return res.status(401).json({ error: 'unauthorized' });
   }
 
-  const { auth0_id, email, given_name, family_name } = req.body;
+  const { auth0_id, auth_sub, email, given_name, family_name } = req.body;
 
   const query = `
-      INSERT INTO users (auth0_id, email, first_name, last_name, created_at)
-      VALUES ($1, $2, $3, $4, NOW())
+      INSERT INTO users (auth0_id, auth_sub, email, first_name, last_name, created_at)
+      VALUES ($1, $2, $3, $4, $5, NOW())
           ON CONFLICT (auth0_id) DO UPDATE
-                                        SET email = EXCLUDED.email,
+                                        SET auth_sub = EXCLUDED.auth_sub,
+                                        email = EXCLUDED.email,
                                         first_name = EXCLUDED.first_name,
                                         last_name = EXCLUDED.last_name
                                         RETURNING *;
   `;
+
+  const result = await pool.query(query, [auth0_id, auth_sub, email, given_name, family_name]);
 
   try {
     const result = await pool.query(query, [auth0_id, email, given_name, family_name]);
