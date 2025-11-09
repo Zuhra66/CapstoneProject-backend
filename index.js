@@ -6,6 +6,7 @@ const cookieParser = require('cookie-parser');
 const csrf = require('csurf');
 
 const authRoutes = require('./routes/auth');
+const syncRoutes = require('./routes/sync'); // internal sync route
 const pool = require('./db');
 
 const app = express();
@@ -39,7 +40,14 @@ app.use(
     })
 );
 
-// CSRF protection
+// -----------------------------
+// Mount internal route BEFORE CSRF
+// -----------------------------
+app.use('/internal', syncRoutes); // internal sync-user API (no CSRF)
+
+// -----------------------------
+// CSRF protection for all other routes
+// -----------------------------
 const csrfProtection = csrf({
   cookie: {
     httpOnly: true,
@@ -48,14 +56,18 @@ const csrfProtection = csrf({
   },
 });
 
-app.use(csrfProtection);
+// apply CSRF only for non-internal routes
+app.use((req, res, next) => {
+  if (req.path.startsWith('/internal')) return next();
+  csrfProtection(req, res, next);
+});
 
-// CSRF token endpoint
+// CSRF token endpoint (still protected by CSRF)
 app.get('/csrf-token', (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
 
-// Routes
+// Auth routes (with CSRF)
 app.use('/auth', authRoutes);
 
 // Health check
