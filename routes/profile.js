@@ -1,20 +1,56 @@
-// routes/profile.js (or in /routes/auth use a new endpoint)
 const express = require('express');
 const router = express.Router();
-const checkJwt = require('../middleware/auth0-check');
 const pool = require('../db');
+const checkJwt = require('../middleware/auth0-check');
 
-router.get('/profile', checkJwt, async (req, res) => {
-  // Auth0 puts the user sub in req.auth.sub
-  const auth0Id = req.auth && req.auth.sub;
-  if (!auth0Id) return res.status(400).json({ error: 'Missing sub' });
+// Get current user profile
+router.get('/', checkJwt, async (req, res) => {
+  try {
+    const auth0Id = req.user.sub;
+    if (!auth0Id) return res.status(400).json({ error: 'Missing Auth0 user ID' });
 
-  const result = await pool.query('SELECT id, auth0_id, email, first_name, last_name, provider FROM users WHERE auth0_id=$1', [auth0Id]);
-  if (result.rowCount === 0) {
-    return res.json({ authenticated: true, user: { auth0Id } });
+    const query = `
+      SELECT id, auth_provider, auth_sub, auth0_id, email, first_name, last_name, name, role, metadata, created_at, updated_at
+      FROM users
+      WHERE auth0_id = $1
+      LIMIT 1;
+    `;
+    const result = await pool.query(query, [auth0Id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found in database' });
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Profile fetch error:', err);
+    res.status(500).json({ error: 'Database error', details: err.message });
   }
+});
 
-  res.json({ authenticated: true, user: result.rows[0] });
+// Update current user profile
+router.patch('/', checkJwt, async (req, res) => {
+  try {
+    const auth0Id = req.user.sub;
+    if (!auth0Id) return res.status(400).json({ error: 'Missing Auth0 user ID' });
+
+    const { first_name, last_name, name, email } = req.body;
+
+    const query = `
+      UPDATE users
+      SET first_name = $1,
+          last_name = $2,
+          name = $3,
+          email = $4,
+          updated_at = NOW()
+      WHERE auth0_id = $5
+      RETURNING id, auth_provider, auth_sub, auth0_id, email, first_name, last_name, name, role, metadata, created_at, updated_at;
+    `;
+    const result = await pool.query(query, [first_name, last_name, name, email, auth0Id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+
+    res.json({ success: true, user: result.rows[0] });
+  } catch (err) {
+    console.error('Profile update error:', err);
+    res.status(500).json({ error: 'Database error', details: err.message });
+  }
 });
 
 module.exports = router;
