@@ -5,14 +5,14 @@ const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const csrf = require('csurf');
 
+const profileRoutes = require('./routes/profile');
 const authRoutes = require('./routes/auth');
-const syncRoutes = require('./routes/sync'); // internal sync route
+const syncRoutes = require('./routes/sync');
 const pool = require('./db');
-
+const adminRoutes = require('./routes/admin');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Security headers
 app.use(
     helmet({
       contentSecurityPolicy: false,
@@ -20,11 +20,9 @@ app.use(
     })
 );
 
-// JSON + Cookies
 app.use(express.json());
 app.use(cookieParser());
 
-// CORS
 const allowedOrigins = [
   'http://localhost:5173',
   process.env.VITE_FRONTEND_URL || 'https://empowermed-frontend.onrender.com',
@@ -40,14 +38,8 @@ app.use(
     })
 );
 
-// -----------------------------
-// Mount internal route BEFORE CSRF
-// -----------------------------
-app.use('/internal', syncRoutes); // internal sync-user API (no CSRF)
-
-// -----------------------------
-// CSRF protection for all other routes
-// -----------------------------
+app.use('/internal', syncRoutes);
+app.use('/api/admin', adminRoutes);
 const csrfProtection = csrf({
   cookie: {
     httpOnly: true,
@@ -56,28 +48,23 @@ const csrfProtection = csrf({
   },
 });
 
-// apply CSRF only for non-internal routes
 app.use((req, res, next) => {
   if (req.path.startsWith('/internal')) return next();
   csrfProtection(req, res, next);
 });
 
-// CSRF token endpoint (still protected by CSRF)
 app.get('/csrf-token', (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
 
-// Auth routes (with CSRF)
 app.use('/auth', authRoutes);
+app.use('/api/profile', profileRoutes);
 
-// Health check
 app.get('/', (req, res) => res.send('EmpowerMed backend running'));
 
-// Database connection check
 pool.query('SELECT NOW()', (err, result) => {
   if (err) console.error('Database connection error:', err);
   else console.log('Database connected:', result.rows[0]);
 });
 
-// Start server
 app.listen(PORT, () => console.log(`Secure server running on port ${PORT}`));
