@@ -27,27 +27,23 @@ app.use(cookieParser());
 // ---- ALLOWED ORIGINS ----
 const allowedOrigins = [
   'http://localhost:5173',
-  process.env.FRONTEND_URL || 'https://www.empowermedwellness.com',
+  'https://www.empowermedwellness.com',
 ];
 
-// ---- DYNAMIC CORS + OPTIONS PRE-FLIGHT ----
+// ---- GLOBAL CORS MIDDLEWARE ----
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (allowedOrigins.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader(
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header(
         'Access-Control-Allow-Headers',
-        'Content-Type,Authorization,X-XSRF-TOKEN'
+        'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-XSRF-TOKEN'
     );
-    res.setHeader(
-        'Access-Control-Allow-Methods',
-        'GET,POST,PATCH,PUT,DELETE,OPTIONS'
-    );
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
   }
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200); // Preflight OK
-  }
+
+  if (req.method === 'OPTIONS') return res.sendStatus(200); // preflight
   next();
 });
 
@@ -63,7 +59,7 @@ const csrfProtection = csrf({
   },
 });
 
-// Apply CSRF to all non-internal routes
+// Apply CSRF only to non-internal routes
 app.use((req, res, next) => {
   if (req.path.startsWith('/internal')) return next();
   csrfProtection(req, res, next);
@@ -72,7 +68,7 @@ app.use((req, res, next) => {
 // CSRF token endpoint
 app.get('/csrf-token', (req, res) => {
   res.cookie('XSRF-TOKEN', req.csrfToken(), {
-    httpOnly: false, // frontend JS needs to read it
+    httpOnly: false, // frontend JS can read
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
   });
