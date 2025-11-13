@@ -61,7 +61,7 @@ const csrfProtection = csrf({
 
 // Apply CSRF only to non-internal routes
 app.use((req, res, next) => {
-  if (req.path.startsWith('/internal')) return next();
+  if (req.path.startsWith('/internal') || req.path.startsWith('/auth')) return next();
   csrfProtection(req, res, next);
 });
 
