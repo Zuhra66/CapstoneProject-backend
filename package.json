@@ -5,7 +5,10 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "db:schema": "dotenv -e .env -- sh -c 'psql --dbname=\"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f empowermed_db/schema.sql'",
+    "db:seed": "dotenv -e .env -- sh -c 'psql --dbname=\"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f empowermed_db/seed.sql'",
+    "db:reset": "dotenv -e .env -- sh -c 'psql --dbname=\"$DATABASE_URL\" -c \"DROP SCHEMA public CASCADE; CREATE SCHEMA public;\" && psql --dbname=\"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f empowermed_db/schema.sql && psql --dbname=\"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f empowermed_db/seed.sql'"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",
@@ -13,8 +16,14 @@
     "csurf": "^1.11.0",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
+    "express-jwt": "^8.5.1",
     "helmet": "^8.1.0",
+    "jwks-rsa": "^3.2.0",
     "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^7.4.4",
+    "nodemon": "^3.1.10"
   },
   "repository": {
     "type": "git",
@@ -26,8 +35,5 @@
   "bugs": {
     "url": "https://github.com/Zuhra66/CapstoneProject-backend/issues"
   },
-  "homepage": "https://github.com/Zuhra66/CapstoneProject-backend#readme",
-  "devDependencies": {
-    "nodemon": "^3.1.10"
-  }
+  "homepage": "https://github.com/Zuhra66/CapstoneProject-backend#readme"
 }
