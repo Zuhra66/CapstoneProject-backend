@@ -5,25 +5,25 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js",
-    "db:schema": "dotenv -e .env -- sh -c 'psql --dbname=\"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f empowermed_db/schema.sql'",
-    "db:seed": "dotenv -e .env -- sh -c 'psql --dbname=\"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f empowermed_db/seed.sql'",
-    "db:reset": "dotenv -e .env -- sh -c 'psql --dbname=\"$DATABASE_URL\" -c \"DROP SCHEMA public CASCADE; CREATE SCHEMA public;\" && psql --dbname=\"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f empowermed_db/schema.sql && psql --dbname=\"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f empowermed_db/seed.sql'"
+    "dev": "nodemon index.js"
   },
   "dependencies": {
+    "axios": "^1.13.2",
+    "bcryptjs": "^3.0.2",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "csurf": "^1.11.0",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "express-jwt": "^8.5.1",
+    "express-openid-connect": "^2.19.2",
     "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
     "jwks-rsa": "^3.2.0",
+    "passport": "^0.7.0",
+    "passport-apple": "^2.0.2",
+    "passport-google-oauth20": "^2.0.0",
     "pg": "^8.16.3"
-  },
-  "devDependencies": {
-    "dotenv-cli": "^7.4.4",
-    "nodemon": "^3.1.10"
   },
   "repository": {
     "type": "git",
@@ -35,5 +35,8 @@
   "bugs": {
     "url": "https://github.com/Zuhra66/CapstoneProject-backend/issues"
   },
-  "homepage": "https://github.com/Zuhra66/CapstoneProject-backend#readme"
+  "homepage": "https://github.com/Zuhra66/CapstoneProject-backend#readme",
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
 }
