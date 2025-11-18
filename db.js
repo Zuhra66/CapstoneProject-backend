@@ -1,10 +1,22 @@
 // db.js
 const { Pool } = require('pg');
 
+const connectionString = process.env.DATABASE_URL;
+
+// Always enable SSL in production (Render, etc.). Locally you can leave it off.
+const useSSL =
+  process.env.NODE_ENV === 'production'
+    ? { rejectUnauthorized: false }
+    : false;
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,   // set this in .env
-  // Render/railway often require SSL:
-  ssl: process.env.PGSSLMODE === 'require' ? { rejectUnauthorized: false } : false,
+  connectionString,
+  ssl: useSSL,
+  // optional but helpful:
+  keepAlive: true,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
+  max: 10,
 });
 
 async function healthCheck() {
