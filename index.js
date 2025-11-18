@@ -13,14 +13,26 @@ const profileRoutes   = require('./routes/profile');
 const authRoutes      = require('./routes/auth');
 const syncRoutes      = require('./routes/sync');
 const adminRoutes     = require('./routes/admin');
-const catalogRouter   = require('./routes/catalog');    // expects /products, /categories, etc.
-const educationRouter = require('./routes/education');  // expects /  → mount at /api/education
+const catalogRouter   = require('./routes/catalog');    // /api/products, /api/categories, etc.
+const educationRouter = require('./routes/education');  // mount at /api/education
 
 const app  = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001; // default 5001 to match your previous setup
 
 /* ---------- Security hardening ---------- */
-app.set('trust proxy', 1); // behind Render/other proxies
+// Behind Render/other proxies; enables req.secure and honors X-Forwarded-* headers
+app.set('trust proxy', 1);
+
+// Enforce HTTPS in production, honoring x-forwarded-proto from the proxy
+function requireHttps(req, res, next) {
+  const xfProto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
+  if (req.secure || xfProto === 'https') return next();
+  // For APIs, return an explicit status instead of redirect (avoids fetch loops)
+  return res.status(426).json({ error: 'Upgrade Required: Use HTTPS' });
+}
+if (process.env.NODE_ENV === 'production') {
+  app.use(requireHttps);
+}
 
 app.use(
   helmet({
@@ -36,7 +48,8 @@ app.use(cookieParser());
 const allowedOrigins = new Set([
   'http://localhost:5173',
   'http://127.0.0.1:5173',
-  'https://www.empowermedwellness.com',
+  'https://empowermedwellness.com',      // ✅ apex domain
+  'https://www.empowermedwellness.com',  // www
   'https://empowermed-frontend.onrender.com',
 ]);
 
