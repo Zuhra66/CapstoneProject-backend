@@ -9,11 +9,10 @@ router.get('/categories', async (_req, res) => {
     const { rows } = await pool.query(`
       SELECT
         id,
-        COALESCE(name, slug)            AS name,
-        LOWER(COALESCE(slug, name))     AS slug
+        COALESCE(name, '')                                       AS name,
+        LOWER(REPLACE(COALESCE(slug, name, ''), ' ', '-'))       AS slug
       FROM public.categories
-      WHERE COALESCE(is_active, TRUE) = TRUE
-      ORDER BY name ASC
+      ORDER BY name ASC, id ASC
     `);
     res.json(rows ?? []);
   } catch (e) {
@@ -26,36 +25,28 @@ router.get('/categories', async (_req, res) => {
 // GET /api/products?q=&category=&limit=&offset=
 router.get('/products', async (req, res) => {
   try {
-    const qRaw   = (req.query.q || '').toString();
-    const catRaw = (req.query.category || '').toString();
-    const q      = qRaw.trim();
-    const cat    = catRaw.trim().toLowerCase();
+    const qRaw   = (req.query.q || '').toString().trim();
+    const catRaw = (req.query.category || '').toString().trim().toLowerCase();
 
     // pagination (optional)
     const limit  = Math.min(Math.max(parseInt(req.query.limit, 10) || 60, 1), 200);
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
 
-    // Build WHERE with parameters
     const params = [];
     const where = [];
 
-    // only active products by default
+    // If you *do* have p.is_active in prod, keep the next line. If not, it still works (COALESCE handles NULL).
     where.push(`COALESCE(p.is_active, TRUE) = TRUE`);
 
-    if (q) {
-      params.push(`%${q}%`);
-      // search in name and tags (if tags is text[])
-      where.push(`(p.name ILIKE $${params.length} OR EXISTS (
-        SELECT 1 FROM unnest(COALESCE(p.tags, ARRAY[]::text[])) t WHERE t ILIKE $${params.length}
-      ))`);
+    if (qRaw) {
+      params.push(`%${qRaw}%`);
+      where.push(`(p.name ILIKE $${params.length})`);
     }
 
-    if (cat && cat !== 'all') {
-      params.push(cat);
-      // match by slug or name, case-insensitive
-      where.push(`(
-        LOWER(c.slug) = $${params.length} OR LOWER(c.name) = $${params.length}
-      )`);
+    if (catRaw && catRaw !== 'all') {
+      params.push(catRaw);
+      // derive slug from name if c.slug is missing
+      where.push(`LOWER(COALESCE(c.slug, REPLACE(c.name, ' ', '-'))) = $${params.length}`);
     }
 
     params.push(limit);
@@ -69,14 +60,15 @@ router.get('/products', async (req, res) => {
         p.price_cents,
         p.image_url,
         p.external_url,
-        COALESCE(p.tags, ARRAY[]::text[])                     AS tags,
-        COALESCE(p.is_active, TRUE)                           AS is_active,
-        json_build_object('name', c.name, 'slug', LOWER(c.slug)) AS category,
-        p.created_at
+        COALESCE(p.is_active, TRUE) AS is_active,
+        json_build_object(
+          'name', c.name,
+          'slug', LOWER(REPLACE(COALESCE(c.slug, c.name, ''), ' ', '-'))
+        ) AS category
       FROM public.products p
       LEFT JOIN public.categories c ON c.id = p.category_id
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-      ORDER BY p.created_at DESC NULLS LAST, p.id ASC
+      ORDER BY p.id ASC
       LIMIT $${params.length - 1} OFFSET $${params.length}
     `;
 
