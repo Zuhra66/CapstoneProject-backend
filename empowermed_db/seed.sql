@@ -26,7 +26,7 @@ INSERT INTO tags (name) VALUES
   ('Firming')
 ON CONFLICT (name) DO NOTHING;
 
--- -------------------------
+-- -------------------------git add .
 -- Products
 -- NOTE: price_cents are integer cents (e.g., 380.00 -> 38000)
 -- -------------------------
