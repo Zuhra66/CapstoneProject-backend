@@ -1,56 +1,98 @@
+// index.js
 require('dotenv').config();
+
 const express = require('express');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const csrf = require('csurf');
 
-const profileRoutes = require('./routes/profile');
-const authRoutes = require('./routes/auth');
-const syncRoutes = require('./routes/sync');
-const adminRoutes = require('./routes/admin');
-const pool = require('./db');
+const { pool, healthCheck } = require('./db');
 
-const app = express();
-const PORT = process.env.PORT || 5000;
+// Routers
+const profileRoutes   = require('./routes/profile');
+const authRoutes      = require('./routes/auth');
+const syncRoutes      = require('./routes/sync');
+const adminRoutes     = require('./routes/admin');
+const catalogRouter   = require('./routes/catalog');    // /api/products, /api/categories, etc.
+const educationRouter = require('./routes/education');  // mount at /api/education
 
-// ---- SECURITY ----
+const app  = express();
+const PORT = process.env.PORT || 5001; // default 5001 to match your previous setup
+
+/* ---------- Security hardening ---------- */
+// Behind Render/other proxies; enables req.secure and honors X-Forwarded-* headers
+app.set('trust proxy', 1);
+
+// Enforce HTTPS in production, honoring x-forwarded-proto from the proxy
+function requireHttps(req, res, next) {
+  const xfProto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
+  if (req.secure || xfProto === 'https') return next();
+  // For APIs, return an explicit status instead of redirect (avoids fetch loops)
+  return res.status(426).json({ error: 'Upgrade Required: Use HTTPS' });
+}
+if (process.env.NODE_ENV === 'production') {
+  app.use(requireHttps);
+}
+
 app.use(
-    helmet({
-      contentSecurityPolicy: false,
-      crossOriginEmbedderPolicy: false,
-    })
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+  })
 );
 
 app.use(express.json());
 app.use(cookieParser());
 
-// ---- ALLOWED ORIGINS ----
-const allowedOrigins = [
+/* ---------- CORS (frontends allowed to call API) ---------- */
+const allowedOrigins = new Set([
   'http://localhost:5173',
-  'https://www.empowermedwellness.com',
-];
+  'http://127.0.0.1:5173',
+  'https://empowermedwellness.com',      // ✅ apex domain
+  'https://www.empowermedwellness.com',  // www
+  'https://empowermed-frontend.onrender.com',
+]);
 
-// ---- GLOBAL CORS MIDDLEWARE ----
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header(
-        'Access-Control-Allow-Headers',
-        'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-XSRF-TOKEN'
+  if (!origin || allowedOrigins.has(origin)) {
+    if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-XSRF-TOKEN'
     );
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
+    res.setHeader(
+      'Access-Control-Allow-Methods',
+      'GET, POST, PATCH, PUT, DELETE, OPTIONS'
+    );
   }
-
   if (req.method === 'OPTIONS') return res.sendStatus(200); // preflight
   next();
 });
 
-// ---- INTERNAL SYNC (no CSRF) ----
+/* ---------- Public/utility routes (no CSRF) ---------- */
+app.get('/', (_req, res) => res.send('EmpowerMed backend running'));
+app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
+
+// Database health check against your Render Postgres
+app.get('/health/db', async (_req, res) => {
+  try {
+    const ok = await healthCheck();
+    res.json({ db: ok ? 'up' : 'down' });
+  } catch (e) {
+    res.status(500).json({ db: 'down', error: e.message });
+  }
+});
+
+// Internal hooks/utilities (keep CSRF off here)
 app.use('/internal', syncRoutes);
 
-// ---- CSRF PROTECTION ----
+// Auth routes (handle their own token/cookie flows; no CSRF)
+app.use('/auth', authRoutes);
+
+/* ---------- CSRF protection for the rest ---------- */
 const csrfProtection = csrf({
   cookie: {
     httpOnly: true,
@@ -59,42 +101,43 @@ const csrfProtection = csrf({
   },
 });
 
-// Apply CSRF only to non-internal routes
+// Apply CSRF to everything except /internal and /auth
 app.use((req, res, next) => {
-  if (req.path.startsWith('/internal')) return next();
-  csrfProtection(req, res, next);
+  if (req.path.startsWith('/internal') || req.path.startsWith('/auth')) return next();
+  return csrfProtection(req, res, next);
 });
 
-// CSRF token endpoint
+// Expose CSRF token so SPA can read it and send back on mutating requests
 app.get('/csrf-token', (req, res) => {
-  res.cookie('XSRF-TOKEN', req.csrfToken(), {
-    httpOnly: false, // frontend JS can read
+  const token = req.csrfToken();
+  res.cookie('XSRF-TOKEN', token, {
+    httpOnly: false,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
   });
-  res.json({ csrfToken: req.csrfToken() });
+  res.json({ csrfToken: token });
 });
 
-// ---- ROUTES ----
-app.use('/auth', authRoutes);
+/* ---------- API routes (CSRF-protected) ---------- */
 app.use('/api/profile', profileRoutes);
-app.use('/api/admin', adminRoutes);
+app.use('/api/admin',   adminRoutes);
+app.use('/api',         catalogRouter);          // e.g. GET /api/products, /api/categories
+app.use('/api/education', educationRouter);      // e.g. GET /api/education
 
-// ---- HEALTH CHECK ----
-app.get('/', (req, res) => res.send('EmpowerMed backend running'));
+/* ---------- Log DB connection once at startup ---------- */
+(async () => {
+  try {
+    const { rows } = await pool.query('SELECT NOW() AS now');
+    console.log('✅ Database connected @', rows[0].now);
+  } catch (err) {
+    console.error('❌ Database connection error:', err.message);
+  }
+})();
 
-// ---- DATABASE CONNECTION CHECK ----
-pool.query('SELECT NOW()', (err, result) => {
-  if (err) console.error('Database connection error:', err);
-  else console.log('Database connected:', result.rows[0]);
-});
-
-// ---- GLOBAL ERROR HANDLER ----
-app.use((err, req, res, next) => {
+/* ---------- Global error handler ---------- */
+app.use((err, _req, res, _next) => {
   if (err.name === 'UnauthorizedError') {
-    return res
-    .status(401)
-    .json({ error: 'Invalid or missing token', details: err.message });
+    return res.status(401).json({ error: 'Invalid or missing token', details: err.message });
   }
   if (err.code === 'EBADCSRFTOKEN') {
     return res.status(403).json({ error: 'Invalid CSRF token' });
@@ -103,7 +146,19 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Server error', details: err.message });
 });
 
-// ---- START SERVER ----
-app.listen(PORT, () =>
-    console.log(`Secure server running on port ${PORT}`)
-);
+/* ---------- Start server & graceful shutdown ---------- */
+const server = app.listen(PORT, () => {
+  console.log(`🔐 Secure server running on port ${PORT}`);
+});
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
+function shutdown() {
+  console.log('Shutting down...');
+  server.close(() => {
+    pool.end(() => process.exit(0));
+  });
+}
+
+module.exports = app;
