@@ -5,7 +5,7 @@ const connectionString = process.env.DATABASE_URL;
 
 // Always enable SSL in production (Render, etc.). Locally you can leave it off.
 const useSSL =
-  process.env.NODE_ENV === 'production'
+  process.env.NODE_ENV === 'Production'
     ? { rejectUnauthorized: false }
     : false;
 
