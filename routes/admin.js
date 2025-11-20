@@ -228,7 +228,7 @@ router.patch('/users/:userId/role', async (req, res) => {
     const { role } = req.body;
 
     // Validate role
-    const validRoles = ['admin', 'provider', 'member'];
+    const validRoles = ['Administrator', 'Provider', 'User'];
     if (!validRoles.includes(role)) {
       return res.status(400).json({
         error: 'Invalid role',
@@ -237,7 +237,7 @@ router.patch('/users/:userId/role', async (req, res) => {
     }
 
     // Prevent self-demotion
-    if (parseInt(userId) === adminUserId && role !== 'admin') {
+    if (parseInt(userId) === adminUserId && role !== 'Administrator') {
       return res.status(400).json({
         error: 'Invalid operation',
         message: 'Cannot remove admin role from yourself'
