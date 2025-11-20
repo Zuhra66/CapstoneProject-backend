@@ -5,9 +5,16 @@ node_modules/
 .env.local
 .env.production
 .env.production.local
-# env/secrets
-.env
-.env.local
+# Node
+node_modules
+dist
+build
+.vite
+
+# Env / secrets
+
+.env.*
+
 
 # logs
 logs/
