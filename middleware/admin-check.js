@@ -56,7 +56,7 @@ const requireAdmin = async (req, res, next) => {
     }
 
     // Check if user has admin role
-    if (user.role !== 'admin') {
+    if (user.role !== 'Administrator') {
       console.warn(`Non-admin access attempt: ${user.email} (role: ${user.role})`);
       return res.status(403).json({
         error: 'Forbidden',
