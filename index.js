@@ -1,10 +1,11 @@
 // index.js
-require('dotenv').config();
-
 const express = require('express');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const csrf = require('csurf');
+const cors = require("cors");
+require("dotenv").config();
+
 
 const { pool, healthCheck } = require('./db');
 
@@ -15,8 +16,18 @@ const syncRoutes      = require('./routes/sync');
 const adminRoutes     = require('./routes/admin');
 const catalogRouter   = require('./routes/catalog');    // /api/products, /api/categories, etc.
 const educationRouter = require('./routes/education');  // mount at /api/education
+const blogRoutes = require("./routes/blog");
+const eventsRoutes    = require("./routes/events");
+
 
 const app  = express();
+app.use(
+  cors({
+    origin: "http://localhost:5173",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 const PORT = process.env.PORT || 5001; // default 5001 to match your previous setup
 
 /* ---------- Security hardening ---------- */
@@ -43,6 +54,8 @@ app.use(
 
 app.use(express.json());
 app.use(cookieParser());
+app.use("/api/blog", blogRoutes);
+app.use("/api/events", eventsRoutes);  
 
 /* ---------- CORS (frontends allowed to call API) ---------- */
 const allowedOrigins = new Set([
