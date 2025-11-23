@@ -1,27 +1,50 @@
-const { expressjwt: jwt } = require('express-jwt');
-const jwksRsa = require('jwks-rsa');
+// middleware/admin-check.js
+const { auth } = require('express-oauth2-jwt-bearer');
+const { pool } = require('../db');
 
-const AUTH0_DOMAIN = 'dev-u7gbqtzuy3mibb7f.us.auth0.com';
-const AUDIENCE = 'https://empowermed-backend.onrender.com';
-
-const checkJwt = jwt({
-  secret: jwksRsa.expressJwtSecret({
-    cache: true,
-    rateLimit: true,
-    jwksRequestsPerMinute: 10,
-    jwksUri: `https://${AUTH0_DOMAIN}/.well-known/jwks.json`
-  }),
-  audience: AUDIENCE,
-  issuer: `https://${AUTH0_DOMAIN}/`,
-  algorithms: ['RS256']
+const checkJwt = auth({
+  audience: process.env.AUTH0_AUDIENCE,
+  issuerBaseURL: `https://${process.env.AUTH0_DOMAIN}/`,
+  // tokenSigningAlg can be left default (RS256) unless you customized
 });
 
-const requireAdmin = (req, res, next) => {
-  const roles = req.auth['https://empowermed-backend.onrender.com/roles'] || [];
-  if (!roles.includes('admin')) {
-    return res.status(403).json({ error: 'Admin access required' });
-  }
-  next();
-};
+async function attachAdminUser(req, _res, next) {
+  try {
+    // Auth0 "sub" identifies the user (e.g., google-oauth2|123...)
+    const sub = req.auth?.payload?.sub;
+    const email = req.auth?.payload?.email;
 
-module.exports = { checkJwt, requireAdmin };
+    if (!sub && !email) {
+      return next(new Error('Missing user identity in token'));
+    }
+
+    // Find your app user by auth0 id OR email
+    const { rows } = await pool.query(
+      `SELECT id, email, role, is_admin
+         FROM public.users
+        WHERE auth0_id = $1 OR email = $2
+        LIMIT 1`,
+      [sub || null, email || null]
+    );
+
+    if (!rows.length) {
+      const err = new Error('User not found in app DB');
+      err.status = 403;
+      return next(err);
+    }
+
+    req.adminUser = rows[0];
+    next();
+  } catch (e) {
+    e.status = 500;
+    next(e);
+  }
+}
+
+function requireAdmin(req, res, next) {
+  const u = req.adminUser;
+  if (u && (u.is_admin === true || u.role === 'admin')) return next();
+  return res.status(403).json({ error: 'Admin role required' });
+}
+
+module.exports = { checkJwt, attachAdminUser, requireAdmin };
