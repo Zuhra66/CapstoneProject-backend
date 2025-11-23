@@ -59,8 +59,8 @@ app.use("/api/events", eventsRoutes);
 
 /* ---------- CORS (frontends allowed to call API) ---------- */
 const allowedOrigins = new Set([
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
+  // 'http://localhost:5173',
+  // 'http://127.0.0.1:5173',
   'https://empowermedwellness.com',      // ✅ apex domain
   'https://www.empowermedwellness.com',  // www
   'https://empowermed-frontend.onrender.com',
