@@ -20,15 +20,15 @@ const blogRoutes = require("./routes/blog");
 const eventsRoutes    = require("./routes/events");
 
 
-const app  = express();
-app.use(
-  cors({
-    origin: "http://localhost:5173",
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
-const PORT = process.env.PORT || 5001; // default 5001 to match your previous setup
+// const app  = express();
+// app.use(
+//   cors({
+//     origin: "http://localhost:5173",
+//     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+//     allowedHeaders: ["Content-Type", "Authorization"],
+//   })
+// );
+// const PORT = process.env.PORT || 5001; // default 5001 to match your previous setup
 
 /* ---------- Security hardening ---------- */
 // Behind Render/other proxies; enables req.secure and honors X-Forwarded-* headers
@@ -59,8 +59,8 @@ app.use("/api/events", eventsRoutes);
 
 /* ---------- CORS (frontends allowed to call API) ---------- */
 const allowedOrigins = new Set([
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
+  // 'http://localhost:5173',
+  // 'http://127.0.0.1:5173',
   'https://empowermedwellness.com',      // ✅ apex domain
   'https://www.empowermedwellness.com',  // www
   'https://empowermed-frontend.onrender.com',
