@@ -3,9 +3,7 @@ const express = require('express');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const csrf = require('csurf');
-const cors = require("cors");
-require("dotenv").config();
-
+require('dotenv').config();
 
 const { pool, healthCheck } = require('./db');
 
@@ -14,24 +12,20 @@ const profileRoutes   = require('./routes/profile');
 const authRoutes      = require('./routes/auth');
 const syncRoutes      = require('./routes/sync');
 const adminRoutes     = require('./routes/admin');
-const catalogRouter   = require('./routes/catalog');    // /api/products, /api/categories, etc.
-const educationRouter = require('./routes/education');  // mount at /api/education
-const blogRoutes = require("./routes/blog");
-const eventsRoutes    = require("./routes/events");
-
+const catalogRouter   = require('./routes/catalog');
+const educationRouter = require('./routes/education');
+const blogRoutes      = require('./routes/blog');
+const eventsRoutes    = require('./routes/events');
 
 const app  = express();
 const PORT = process.env.PORT || 5001;
 
 /* ---------- Security hardening ---------- */
-// Behind Render/other proxies; enables req.secure and honors X-Forwarded-* headers
 app.set('trust proxy', 1);
 
-// Enforce HTTPS in production, honoring x-forwarded-proto from the proxy
 function requireHttps(req, res, next) {
   const xfProto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
   if (req.secure || xfProto === 'https') return next();
-  // For APIs, return an explicit status instead of redirect (avoids fetch loops)
   return res.status(426).json({ error: 'Upgrade Required: Use HTTPS' });
 }
 if (process.env.NODE_ENV === 'production') {
@@ -47,23 +41,22 @@ app.use(
 
 app.use(express.json());
 app.use(cookieParser());
-app.use("/api/blog", blogRoutes);
-app.use("/api/events", eventsRoutes);  
-
 
 /* ---------- CORS (frontends allowed to call API) ---------- */
 const allowedOrigins = new Set([
   'http://localhost:5173',
   'http://127.0.0.1:5173',
-  'https://empowermedwellness.com',      // ✅ apex domain
-  'https://www.empowermedwellness.com',  // www
+  'https://empowermedwellness.com',
+  'https://www.empowermedwellness.com',
   'https://empowermed-frontend.onrender.com',
 ]);
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (!origin && allowedOrigins.has(origin)) {
-    if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
+
+  // only set CORS when there *is* an Origin and it's allowed
+  if (origin && allowedOrigins.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader(
@@ -75,6 +68,7 @@ app.use((req, res, next) => {
       'GET, POST, PATCH, PUT, DELETE, OPTIONS'
     );
   }
+
   if (req.method === 'OPTIONS') return res.sendStatus(200); // preflight
   next();
 });
@@ -83,7 +77,6 @@ app.use((req, res, next) => {
 app.get('/', (_req, res) => res.send('EmpowerMed backend running'));
 app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
 
-// Database health check against your Render Postgres
 app.get('/health/db', async (_req, res) => {
   try {
     const ok = await healthCheck();
@@ -96,8 +89,12 @@ app.get('/health/db', async (_req, res) => {
 // Internal hooks/utilities (keep CSRF off here)
 app.use('/internal', syncRoutes);
 
-// Auth routes (handle their own token/cookie flows; no CSRF)
+// Auth routes (no CSRF)
 app.use('/auth', authRoutes);
+
+// ✅ Public blog + events routes (no CSRF, but WITH CORS)
+app.use('/api/blog', blogRoutes);
+app.use('/api/events', eventsRoutes);
 
 /* ---------- CSRF protection for the rest ---------- */
 const csrfProtection = csrf({
@@ -108,13 +105,16 @@ const csrfProtection = csrf({
   },
 });
 
-// Apply CSRF to everything except /internal and /auth
+// Apply CSRF to everything EXCEPT internal/auth/blog/events
 app.use((req, res, next) => {
-  if (req.path.startsWith('/internal') || req.path.startsWith('/auth')) return next();
+  if (req.path.startsWith('/internal')) return next();
+  if (req.path.startsWith('/auth')) return next();
+  if (req.path.startsWith('/api/blog')) return next();
+  if (req.path.startsWith('/api/events')) return next();
   return csrfProtection(req, res, next);
 });
 
-// Expose CSRF token so SPA can read it and send back on mutating requests
+// Expose CSRF token
 app.get('/csrf-token', (req, res) => {
   const token = req.csrfToken();
   res.cookie('XSRF-TOKEN', token, {
@@ -128,8 +128,8 @@ app.get('/csrf-token', (req, res) => {
 /* ---------- API routes (CSRF-protected) ---------- */
 app.use('/api/profile', profileRoutes);
 app.use('/api/admin',   adminRoutes);
-app.use('/api',         catalogRouter);          // e.g. GET /api/products, /api/categories
-app.use('/api/education', educationRouter);      // e.g. GET /api/education
+app.use('/api',         catalogRouter);
+app.use('/api/education', educationRouter);
 
 /* ---------- Log DB connection once at startup ---------- */
 (async () => {
