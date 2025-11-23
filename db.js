@@ -1,27 +1,16 @@
 // db.js
-const { Pool } = require('pg');
+import pkg from 'pg';
+const { Pool } = pkg;
 
-const connectionString = process.env.DATABASE_URL;
+const isRender = /render\.com/.test(process.env.DATABASE_URL || '');
 
-// Always enable SSL in production (Render, etc.). Locally you can leave it off.
-const useSSL =
-  process.env.NODE_ENV === 'production'
-    ? { rejectUnauthorized: false }
-    : false;
-
-const pool = new Pool({
-  connectionString,
-  ssl: useSSL,
-  // optional but helpful:
-  keepAlive: true,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
-  max: 10,
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: isRender ? { rejectUnauthorized: false } : false,
 });
 
-async function healthCheck() {
-  await pool.query('SELECT 1');
-  return true;
+// optional: quick ping at startup
+export async function pingDB() {
+  const r = await pool.query('select 1 as ok');
+  return r.rows[0].ok === 1;
 }
-
-module.exports = { pool, healthCheck };
