@@ -21,15 +21,6 @@ const eventsRoutes    = require("./routes/events");
 
 
 const app  = express();
-
-// app.use(
-//   cors({
-//     origin: "http://localhost:5173",
-//     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-//     allowedHeaders: ["Content-Type", "Authorization"],
-//   })
-// );
-
 const PORT = process.env.PORT || 5001;
 
 /* ---------- Security hardening ---------- */
@@ -59,10 +50,11 @@ app.use(cookieParser());
 app.use("/api/blog", blogRoutes);
 app.use("/api/events", eventsRoutes);  
 
+
 /* ---------- CORS (frontends allowed to call API) ---------- */
 const allowedOrigins = new Set([
-  // 'http://localhost:5173',
-  // 'http://127.0.0.1:5173',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
   'https://empowermedwellness.com',      // ✅ apex domain
   'https://www.empowermedwellness.com',  // www
   'https://empowermed-frontend.onrender.com',
@@ -70,7 +62,7 @@ const allowedOrigins = new Set([
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (!origin || allowedOrigins.has(origin)) {
+  if (!origin && allowedOrigins.has(origin)) {
     if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
