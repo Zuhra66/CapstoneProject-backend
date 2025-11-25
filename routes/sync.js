@@ -1,7 +1,11 @@
 // routes/sync.js
 const express = require('express');
 const router = express.Router();
-const pool = require('../db'); // Postgres pool
+const { pool } = require('../db'); // force correct import
+
+if (!pool || typeof pool.query !== 'function') {
+  throw new Error('Postgres pool is not initialized correctly');
+}
 
 router.post('/sync-user', async (req, res) => {
   const apiKey = req.headers['x-internal-api-key'];

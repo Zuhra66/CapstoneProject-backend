@@ -4,9 +4,20 @@ const { Pool } = pkg;
 
 const isRender = /render\.com/.test(process.env.DATABASE_URL || '');
 
-export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: isRender ? { rejectUnauthorized: false } : false,
+// Always enable SSL in production (Render, etc.). Locally you can leave it off.
+const useSSL =
+  process.env.NODE_ENV === 'Production'
+    ? { rejectUnauthorized: false }
+    : false;
+
+const pool = new Pool({
+  connectionString,
+  ssl: useSSL,
+  // optional but helpful:
+  keepAlive: true,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
+  max: 10,
 });
 
 // optional: quick ping at startup
