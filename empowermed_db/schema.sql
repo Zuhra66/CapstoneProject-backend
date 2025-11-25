@@ -55,7 +55,7 @@ CREATE TABLE users (
   auth_sub        TEXT UNIQUE NOT NULL,           -- e.g. 'auth0|abc123'
   email           CITEXT UNIQUE,
   name            TEXT,
-  role            TEXT NOT NULL DEFAULT 'user',   -- 'user','admin','provider'
+  role            TEXT NOT NULL DEFAULT 'user',   -- 'user','Administrator','provider'
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );

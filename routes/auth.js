@@ -92,7 +92,7 @@ async function upsertUserFromProfile(profile) {
       auth0_id,
       email,
       name,
-      adminByEmail ? 'admin' : 'member',
+      adminByEmail ? 'Administrator' : 'member',
       adminByEmail,
     ]
   );

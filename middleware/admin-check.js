@@ -1,50 +1,79 @@
 // middleware/admin-check.js
-const { auth } = require('express-oauth2-jwt-bearer');
-const { pool } = require('../db');
+const { expressjwt: jwt } = require('express-jwt');
+const jwksRsa = require('jwks-rsa');
+const pool = require('../db');
 
-const checkJwt = auth({
+// Reuse your existing Auth0 JWT check
+const checkJwt = jwt({
+  secret: jwksRsa.expressJwtSecret({
+    cache: true,
+    rateLimit: true,
+    jwksRequestsPerMinute: 5, // Reduced for production
+    jwksUri: `https://${process.env.AUTH0_DOMAIN}/.well-known/jwks.json`
+  }),
   audience: process.env.AUTH0_AUDIENCE,
-  issuerBaseURL: `https://${process.env.AUTH0_DOMAIN}/`,
-  // tokenSigningAlg can be left default (RS256) unless you customized
+  issuer: `https://${process.env.AUTH0_DOMAIN}/`,
+  algorithms: ['RS256']
 });
 
-async function attachAdminUser(req, _res, next) {
+// Admin role check using your database
+const requireAdmin = async (req, res, next) => {
   try {
-    // Auth0 "sub" identifies the user (e.g., google-oauth2|123...)
-    const sub = req.auth?.payload?.sub;
-    const email = req.auth?.payload?.email;
+    // User is already validated by checkJwt at this point
+    const auth0Id = req.auth?.payload?.sub;
 
-    if (!sub && !email) {
-      return next(new Error('Missing user identity in token'));
+    if (!auth0Id) {
+      console.error('No auth0_id found in token');
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid authentication token'
+      });
     }
 
-    // Find your app user by auth0 id OR email
-    const { rows } = await pool.query(
-      `SELECT id, email, role, is_admin
-         FROM public.users
-        WHERE auth0_id = $1 OR email = $2
-        LIMIT 1`,
-      [sub || null, email || null]
+    // Check user role in your PostgreSQL database
+    const userResult = await pool.query(
+        'SELECT id, role, is_active, email FROM users WHERE auth0_id = $1',
+        [auth0Id]
     );
 
-    if (!rows.length) {
-      const err = new Error('User not found in app DB');
-      err.status = 403;
-      return next(err);
+    if (userResult.rows.length === 0) {
+      console.warn(`User not found in database: ${auth0Id}`);
+      return res.status(404).json({
+        error: 'User not found',
+        message: 'Please complete your profile setup'
+      });
     }
 
-    req.adminUser = rows[0];
+    const user = userResult.rows[0];
+
+    // Check if account is active
+    if (!user.is_active) {
+      console.warn(`Inactive admin access attempt: ${user.email}`);
+      return res.status(403).json({
+        error: 'Account deactivated',
+        message: 'Your account has been deactivated. Please contact support.'
+      });
+    }
+
+    // Check if user has admin role
+    if (user.role !== 'Administrator') {
+      console.warn(`Non-admin access attempt: ${user.email} (role: ${user.role})`);
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Administrator privileges required to access this resource'
+      });
+    }
+
+    // Add admin user to request for audit logging
+    req.adminUser = user;
     next();
-  } catch (e) {
-    e.status = 500;
-    next(e);
+  } catch (error) {
+    console.error('Admin role check error:', error);
+    res.status(500).json({
+      error: 'Authorization error',
+      message: 'Failed to verify administrator access'
+    });
   }
-}
+};
 
-function requireAdmin(req, res, next) {
-  const u = req.adminUser;
-  if (u && (u.is_admin === true || u.role === 'admin')) return next();
-  return res.status(403).json({ error: 'Admin role required' });
-}
-
-module.exports = { checkJwt, attachAdminUser, requireAdmin };
+module.exports = { checkJwt, requireAdmin };

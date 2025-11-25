@@ -1,10 +1,9 @@
 // index.js
-require('dotenv').config();
-
 const express = require('express');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const csrf = require('csurf');
+require('dotenv').config();
 
 const { pool, healthCheck } = require('./db');
 
@@ -16,8 +15,10 @@ const profileRoutes   = require('./routes/profile');
 const authRoutes      = require('./routes/auth');
 const syncRoutes      = require('./routes/sync');
 const adminRoutes     = require('./routes/admin');
-const catalogRouter   = require('./routes/catalog');    // /api/products, /api/categories
-const educationRouter = require('./routes/education');  // /api/education
+const catalogRouter   = require('./routes/catalog');
+const educationRouter = require('./routes/education');
+const blogRoutes      = require('./routes/blog');
+const eventsRoutes    = require('./routes/events');
 
 const app  = express();
 const PORT = process.env.PORT || 5001;
@@ -55,8 +56,10 @@ const allowedOrigins = new Set([
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (!origin || allowedOrigins.has(origin)) {
-    if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
+
+  // only set CORS when there *is* an Origin and it's allowed
+  if (origin && allowedOrigins.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader(
@@ -68,16 +71,14 @@ app.use((req, res, next) => {
       'GET, POST, PATCH, PUT, DELETE, OPTIONS'
     );
   }
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
+
+  if (req.method === 'OPTIONS') return res.sendStatus(200); // preflight
   next();
 });
 
 /* ---------- Public/utility routes (no CSRF) ---------- */
 app.get('/', (_req, res) => res.send('EmpowerMed backend running'));
 app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
-
-// (optional) simple "me" endpoint some frontends call
-app.get('/auth/me', (_req, res) => res.json({ ok: true }));
 
 app.get('/health/db', async (_req, res) => {
   try {
@@ -89,40 +90,30 @@ app.get('/health/db', async (_req, res) => {
 });
 
 app.use('/internal', syncRoutes);
+
+// Auth routes (no CSRF)
 app.use('/auth', authRoutes);
 
-/* ---------- CSRF: protect pages & non-JWT API, skip for Bearer JWT ---------- */
-const isProd = process.env.NODE_ENV === 'production';
+// ✅ Public blog + events routes (no CSRF, but WITH CORS)
+app.use('/api/blog', blogRoutes);
+app.use('/api/events', eventsRoutes);
+
+/* ---------- CSRF protection for the rest ---------- */
 const csrfProtection = csrf({
   cookie: { httpOnly: true, sameSite: 'lax', secure: isProd },
 });
 
-/**
- * Apply CSRF normally, UNLESS:
- *  - the path starts with /api/
- *  - AND request has Authorization: Bearer <token>
- * In that case we trust the JWT and skip CSRF.
- */
-function csrfUnlessBearer(req, res, next) {
-  // Always allow these through without CSRF
-  if (req.path.startsWith('/internal') || req.path.startsWith('/auth')) {
-    return next();
-  }
-
-  const isApi = req.path.startsWith('/api/');
-  const auth = req.headers.authorization || '';
-  const hasBearer = auth.startsWith('Bearer ');
-
-  if (isApi && hasBearer) {
-    return next();
-  }
+// Apply CSRF to everything EXCEPT internal/auth/blog/events
+app.use((req, res, next) => {
+  if (req.path.startsWith('/internal')) return next();
+  if (req.path.startsWith('/auth')) return next();
+  if (req.path.startsWith('/api/blog')) return next();
+  if (req.path.startsWith('/api/events')) return next();
   return csrfProtection(req, res, next);
 }
 
-app.use(csrfUnlessBearer);
-
-// Token endpoint for any pages/forms that still need CSRF
-app.get('/csrf-token', csrfProtection, (req, res) => {
+// Expose CSRF token
+app.get('/csrf-token', (req, res) => {
   const token = req.csrfToken();
   res.cookie('XSRF-TOKEN', token, {
     httpOnly: false,
@@ -134,12 +125,9 @@ app.get('/csrf-token', csrfProtection, (req, res) => {
 
 /* ---------- API routes ---------- */
 app.use('/api/profile', profileRoutes);
-
-// ✅ Admin routes guarded by JWT → attach DB user → require admin
-app.use('/api/admin', checkJwt, attachAdminUser, requireAdmin, adminRoutes);
-
-app.use('/api',           catalogRouter);     // e.g. GET /api/products, /api/categories
-app.use('/api/education', educationRouter);   // e.g. GET /api/education
+app.use('/api/admin',   adminRoutes);
+app.use('/api',         catalogRouter);
+app.use('/api/education', educationRouter);
 
 /* ---------- Log DB connection once at startup ---------- */
 (async () => {
