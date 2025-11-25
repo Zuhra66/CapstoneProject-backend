@@ -7,6 +7,9 @@ require('dotenv').config();
 
 const { pool, healthCheck } = require('./db');
 
+// ✅ admin JWT + role guard
+const { checkJwt, attachAdminUser, requireAdmin } = require('./middleware/admin-check');
+
 // Routers
 const profileRoutes   = require('./routes/profile');
 const authRoutes      = require('./routes/auth');
@@ -40,7 +43,7 @@ app.use(
 app.use(express.json());
 app.use(cookieParser());
 
-/* ---------- CORS (frontends allowed to call API) ---------- */
+/* ---------- CORS ---------- */
 const allowedOrigins = new Set([
   'http://localhost:5173',
   'http://127.0.0.1:5173',
@@ -81,7 +84,6 @@ app.get('/health/db', async (_req, res) => {
   }
 });
 
-// Internal hooks/utilities (keep CSRF off here)
 app.use('/internal', syncRoutes);
 
 // Auth routes (no CSRF)
@@ -93,11 +95,7 @@ app.use('/api/events', eventsRoutes);
 
 /* ---------- CSRF protection for the rest ---------- */
 const csrfProtection = csrf({
-  cookie: {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-  },
+  cookie: { httpOnly: true, sameSite: 'lax', secure: isProd },
 });
 
 app.use((req, res, next) => {
@@ -106,19 +104,19 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/api/blog')) return next();
   if (req.path.startsWith('/api/events')) return next();
   return csrfProtection(req, res, next);
-});
+}
 
 app.get('/csrf-token', (req, res) => {
   const token = req.csrfToken();
   res.cookie('XSRF-TOKEN', token, {
     httpOnly: false,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    secure: isProd,
   });
   res.json({ csrfToken: token });
 });
 
-/* ---------- API routes (CSRF-protected) ---------- */
+/* ---------- API routes ---------- */
 app.use('/api/profile', profileRoutes);
 app.use('/api/admin',   adminRoutes);
 app.use('/api',         catalogRouter);
@@ -143,7 +141,7 @@ app.use((err, _req, res, _next) => {
     return res.status(403).json({ error: 'Invalid CSRF token' });
   }
   console.error(err);
-  res.status(500).json({ error: 'Server error', details: err.message });
+  res.status(err.status || 500).json({ error: 'Server error', details: err.message });
 });
 
 /* ---------- Start server & graceful shutdown ---------- */
