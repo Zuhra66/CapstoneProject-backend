@@ -32,15 +32,13 @@ function requireHttps(req, res, next) {
   if (req.secure || xfProto === 'https') return next();
   return res.status(426).json({ error: 'Upgrade Required: Use HTTPS' });
 }
-if (process.env.NODE_ENV === 'production') {
-  app.use(requireHttps);
-}
+if (process.env.NODE_ENV === 'production') app.use(requireHttps);
 
 app.use(
-  helmet({
-    contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false,
-  })
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginEmbedderPolicy: false,
+    })
 );
 
 app.use(express.json());
@@ -57,22 +55,19 @@ const allowedOrigins = new Set([
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-
-  // only set CORS when there *is* an Origin and it's allowed
   if (origin && allowedOrigins.has(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader(
-      'Access-Control-Allow-Headers',
-      'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-XSRF-TOKEN'
+        'Access-Control-Allow-Headers',
+        'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-XSRF-TOKEN'
     );
     res.setHeader(
-      'Access-Control-Allow-Methods',
-      'GET, POST, PATCH, PUT, DELETE, OPTIONS'
+        'Access-Control-Allow-Methods',
+        'GET, POST, PATCH, PUT, DELETE, OPTIONS'
     );
   }
-
   if (req.method === 'OPTIONS') return res.sendStatus(200); // preflight
   next();
 });
@@ -95,7 +90,7 @@ app.use('/internal', syncRoutes);
 // Auth routes (no CSRF)
 app.use('/auth', authRoutes);
 
-// ✅ Public blog + events routes (no CSRF, but WITH CORS)
+// Public blog + events routes (no CSRF)
 app.use('/api/blog', blogRoutes);
 app.use('/api/events', eventsRoutes);
 
@@ -104,7 +99,6 @@ const csrfProtection = csrf({
   cookie: { httpOnly: true, sameSite: 'lax', secure: isProd },
 });
 
-// Apply CSRF to everything EXCEPT internal/auth/blog/events
 app.use((req, res, next) => {
   if (req.path.startsWith('/internal')) return next();
   if (req.path.startsWith('/auth')) return next();
@@ -113,7 +107,6 @@ app.use((req, res, next) => {
   return csrfProtection(req, res, next);
 });
 
-// Expose CSRF token
 app.get('/csrf-token', (req, res) => {
   const token = req.csrfToken();
   res.cookie('XSRF-TOKEN', token, {
@@ -130,7 +123,7 @@ app.use('/api/admin',   adminRoutes);
 app.use('/api',         catalogRouter);
 app.use('/api/education', educationRouter);
 
-/* ---------- Log DB connection once at startup ---------- */
+/* ---------- Log DB connection once ---------- */
 (async () => {
   try {
     const { rows } = await pool.query('SELECT NOW() AS now');

@@ -12,17 +12,20 @@ const connectionString =
   `@${process.env.PGHOST || 'localhost'}:${process.env.PGPORT || 5432}/` +
   `${process.env.PGDATABASE || 'empowermed'}`;
 
-// Create the pool
+// SSL config: on in production (Render, etc.), off locally
+const useSSL = isProd ? { rejectUnauthorized: false } : false;
+
+// create the pool
 const pool = new Pool({
   connectionString,
-  ssl: isProd ? { rejectUnauthorized: false } : false,
+  ssl: useSSL,
   keepAlive: true,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
   max: 10,
 });
 
-// Health check used by /health/db
+// health check used by /health/db
 async function healthCheck() {
   try {
     const r = await pool.query('SELECT 1 AS ok');
