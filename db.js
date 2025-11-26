@@ -1,27 +1,39 @@
 // db.js
-import pkg from 'pg';
-const { Pool } = pkg;
+const { Pool } = require('pg');
 
-const isRender = /render\.com/.test(process.env.DATABASE_URL || '');
+const isProd = process.env.NODE_ENV === 'production';
 
-// Always enable SSL in production (Render, etc.). Locally you can leave it off.
-const useSSL =
-  process.env.NODE_ENV === 'Production'
-    ? { rejectUnauthorized: false }
-    : false;
+// Build the connection string
+// Prefer DATABASE_URL (e.g., Render), or fall back to PG* vars for local dev
+const connectionString =
+  process.env.DATABASE_URL ||
+  process.env.PG_CONNECTION_STRING ||
+  `postgresql://${process.env.PGUSER || 'postgres'}:${process.env.PGPASSWORD || ''}` +
+  `@${process.env.PGHOST || 'localhost'}:${process.env.PGPORT || 5432}/` +
+  `${process.env.PGDATABASE || 'empowermed'}`;
 
+// Create the pool
 const pool = new Pool({
   connectionString,
-  ssl: useSSL,
-  // optional but helpful:
+  ssl: isProd ? { rejectUnauthorized: false } : false,
   keepAlive: true,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
   max: 10,
 });
 
-// optional: quick ping at startup
-export async function pingDB() {
-  const r = await pool.query('select 1 as ok');
-  return r.rows[0].ok === 1;
+// Health check used by /health/db
+async function healthCheck() {
+  try {
+    const r = await pool.query('SELECT 1 AS ok');
+    return r.rows[0].ok === 1;
+  } catch (err) {
+    console.error('DB health check failed:', err.message);
+    return false;
+  }
 }
+
+module.exports = {
+  pool,
+  healthCheck,
+};

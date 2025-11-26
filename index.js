@@ -22,6 +22,7 @@ const eventsRoutes    = require('./routes/events');
 
 const app  = express();
 const PORT = process.env.PORT || 5001;
+const isProd = process.env.NODE_ENV === 'production';
 
 /* ---------- Security hardening ---------- */
 app.set('trust proxy', 1);
@@ -110,7 +111,7 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/api/blog')) return next();
   if (req.path.startsWith('/api/events')) return next();
   return csrfProtection(req, res, next);
-}
+});
 
 // Expose CSRF token
 app.get('/csrf-token', (req, res) => {
