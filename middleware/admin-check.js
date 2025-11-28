@@ -1,19 +1,20 @@
-// middleware/admin-check.js
+// middleware/admin-check.js - Fixed version with consistent JWT configuration
 const { expressjwt: jwt } = require('express-jwt');
 const jwksRsa = require('jwks-rsa');
 const { pool } = require('../db');
 
-// Reuse your existing Auth0 JWT check
+// JWT validation middleware - SAME configuration used everywhere
 const checkJwt = jwt({
   secret: jwksRsa.expressJwtSecret({
     cache: true,
     rateLimit: true,
-    jwksRequestsPerMinute: 5, // Reduced for production
+    jwksRequestsPerMinute: 5,
     jwksUri: `https://${process.env.AUTH0_DOMAIN}/.well-known/jwks.json`,
   }),
   audience: process.env.AUTH0_AUDIENCE,
   issuer: `https://${process.env.AUTH0_DOMAIN}/`,
   algorithms: ['RS256'],
+  credentialsRequired: true, // Explicitly set to true for consistency
 });
 
 /**
@@ -26,9 +27,7 @@ const checkJwt = jwt({
 const attachAdminUser = async (req, res, next) => {
   try {
     // express-jwt puts payload on req.auth
-    const auth0Id =
-      req.auth?.sub ||
-      req.auth?.payload?.sub; // keep this fallback just in case
+    const auth0Id = req.auth?.sub;
 
     if (!auth0Id) {
       console.error('No auth0_id found in token');
@@ -39,8 +38,10 @@ const attachAdminUser = async (req, res, next) => {
     }
 
     const userResult = await pool.query(
-      'SELECT id, role, is_active, email FROM users WHERE auth0_id = $1',
-      [auth0Id]
+        `SELECT id, auth0_id, email, first_name, last_name, name, role, 
+              is_active, is_admin, created_at, updated_at 
+       FROM users WHERE auth0_id = $1`,
+        [auth0Id]
     );
 
     if (userResult.rows.length === 0) {
@@ -61,6 +62,8 @@ const attachAdminUser = async (req, res, next) => {
       });
     }
 
+    console.log('✅ Admin user attached:', { id: user.id, email: user.email, role: user.role });
+
     // Attach user for downstream middleware/routes
     req.adminUser = user;
     next();
@@ -75,7 +78,7 @@ const attachAdminUser = async (req, res, next) => {
 
 /**
  * requireAdmin
- * - Requires that req.adminUser (from attachAdminUser) has role 'Administrator'
+ * - Requires that req.adminUser (from attachAdminUser) has role 'Administrator' or is_admin = true
  */
 const requireAdmin = (req, res, next) => {
   const user = req.adminUser;
@@ -87,14 +90,18 @@ const requireAdmin = (req, res, next) => {
     });
   }
 
-  if (user.role !== 'Administrator') {
-    console.warn(`Non-admin access attempt: ${user.email} (role: ${user.role})`);
+  // Check both is_admin flag and role for flexibility
+  const isAdmin = user.is_admin === true || user.role === 'Administrator';
+
+  if (!isAdmin) {
+    console.warn(`Non-admin access attempt: ${user.email} (role: ${user.role}, is_admin: ${user.is_admin})`);
     return res.status(403).json({
       error: 'Forbidden',
       message: 'Administrator privileges required to access this resource',
     });
   }
 
+  console.log('✅ Admin access granted for:', user.email);
   next();
 };
 
