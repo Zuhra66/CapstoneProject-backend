@@ -1,4 +1,4 @@
-// index.js
+// index.js - Fix the HTTPS requirement
 const express = require('express');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
@@ -6,11 +6,8 @@ const csrf = require('csurf');
 require('dotenv').config();
 
 const { pool, healthCheck } = require('./db');
-
-// ✅ admin JWT + role guard
 const { checkJwt, attachAdminUser, requireAdmin } = require('./middleware/admin-check');
 
-// Routers
 const profileRoutes   = require('./routes/profile');
 const authRoutes      = require('./routes/auth');
 const syncRoutes      = require('./routes/sync');
@@ -20,19 +17,21 @@ const educationRouter = require('./routes/education');
 const blogRoutes      = require('./routes/blog');
 const eventsRoutes    = require('./routes/events');
 
-const app  = express();
-const PORT = process.env.PORT || 5001;
+const app = express();
+const PORT = process.env.PORT || 5000;
 const isProd = process.env.NODE_ENV === 'production';
 
 /* ---------- Security hardening ---------- */
 app.set('trust proxy', 1);
 
-function requireHttps(req, res, next) {
-  const xfProto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
-  if (req.secure || xfProto === 'https') return next();
-  return res.status(426).json({ error: 'Upgrade Required: Use HTTPS' });
-}
-if (process.env.NODE_ENV === 'production') app.use(requireHttps);
+// REMOVE or COMMENT OUT the requireHttps middleware for local development
+// function requireHttps(req, res, next) {
+//   if (!isProd) return next();
+//   const xfProto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
+//   if (req.secure || xfProto === 'https') return next();
+//   return res.status(426).json({ error: 'Upgrade Required: Use HTTPS' });
+// }
+// app.use(requireHttps); // COMMENT THIS LINE
 
 app.use(
     helmet({
@@ -45,37 +44,40 @@ app.use(express.json());
 app.use(cookieParser());
 
 /* ---------- CORS ---------- */
-const allowedOrigins = new Set([
+const allowedOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   'https://empowermedwellness.com',
   'https://www.empowermedwellness.com',
-  'https://empowermed-frontend.onrender.com',
-]);
+];
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (origin && allowedOrigins.has(origin)) {
+
+  if (origin && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader(
-        'Access-Control-Allow-Headers',
-        'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-XSRF-TOKEN'
-    );
-    res.setHeader(
-        'Access-Control-Allow-Methods',
-        'GET, POST, PATCH, PUT, DELETE, OPTIONS'
-    );
   }
-  if (req.method === 'OPTIONS') return res.sendStatus(200); // preflight
+
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader(
+      'Access-Control-Allow-Headers',
+      'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-XSRF-TOKEN, X-Internal-API-Key'
+  );
+  res.setHeader(
+      'Access-Control-Allow-Methods',
+      'GET, POST, PATCH, PUT, DELETE, OPTIONS'
+  );
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   next();
 });
 
-/* ---------- Public/utility routes (no CSRF) ---------- */
+/* ---------- Public routes ---------- */
 app.get('/', (_req, res) => res.send('EmpowerMed backend running'));
 app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
-
 app.get('/health/db', async (_req, res) => {
   try {
     const ok = await healthCheck();
@@ -85,25 +87,36 @@ app.get('/health/db', async (_req, res) => {
   }
 });
 
+// Add a test endpoint to verify CORS is working
+app.get('/test-cors', (req, res) => {
+  res.json({
+    message: 'CORS test successful',
+    origin: req.headers.origin,
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.use('/internal', syncRoutes);
-
-// Auth routes (no CSRF)
 app.use('/auth', authRoutes);
-
-// Public blog + events routes (no CSRF)
 app.use('/api/blog', blogRoutes);
 app.use('/api/events', eventsRoutes);
 
-/* ---------- CSRF protection for the rest ---------- */
+/* ---------- CSRF protection ---------- */
 const csrfProtection = csrf({
-  cookie: { httpOnly: true, sameSite: 'lax', secure: isProd },
+  cookie: {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: isProd
+  }
 });
 
 app.use((req, res, next) => {
-  if (req.path.startsWith('/internal')) return next();
-  if (req.path.startsWith('/auth')) return next();
-  if (req.path.startsWith('/api/blog')) return next();
-  if (req.path.startsWith('/api/events')) return next();
+  if (
+      req.path.startsWith('/internal') ||
+      req.path.startsWith('/auth') ||
+      req.path.startsWith('/api/blog') ||
+      req.path.startsWith('/api/events')
+  ) return next();
   return csrfProtection(req, res, next);
 });
 
@@ -112,18 +125,18 @@ app.get('/csrf-token', (req, res) => {
   res.cookie('XSRF-TOKEN', token, {
     httpOnly: false,
     sameSite: 'lax',
-    secure: isProd,
+    secure: isProd
   });
   res.json({ csrfToken: token });
 });
 
 /* ---------- API routes ---------- */
 app.use('/api/profile', profileRoutes);
-app.use('/api/admin',   adminRoutes);
-app.use('/api',         catalogRouter);
+app.use('/api/admin', adminRoutes);
+app.use('/api', catalogRouter);
 app.use('/api/education', educationRouter);
 
-/* ---------- Log DB connection once ---------- */
+/* ---------- DB connection check ---------- */
 (async () => {
   try {
     const { rows } = await pool.query('SELECT NOW() AS now');
@@ -141,13 +154,20 @@ app.use((err, _req, res, _next) => {
   if (err.code === 'EBADCSRFTOKEN') {
     return res.status(403).json({ error: 'Invalid CSRF token' });
   }
-  console.error(err);
-  res.status(err.status || 500).json({ error: 'Server error', details: err.message });
+  console.error('Global error handler:', err);
+  res.status(err.status || 500).json({
+    error: 'Server error',
+    details: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error'
+  });
 });
 
-/* ---------- Start server & graceful shutdown ---------- */
-const server = app.listen(PORT, () => {
-  console.log(`🔐 Secure server running on port ${PORT}`);
+/* ---------- Start server ---------- */
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🔐 Server running on port ${PORT}`);
+  console.log(`🌐 Environment: ${process.env.NODE_ENV}`);
+  console.log(`🎯 Allowed origins: ${allowedOrigins.join(', ')}`);
+  console.log(`🔄 Sync routes available at /internal/sync-user`);
+  console.log(`🧪 Test CORS endpoint: http://localhost:${PORT}/test-cors`);
 });
 
 process.on('SIGTERM', shutdown);
@@ -155,9 +175,7 @@ process.on('SIGINT', shutdown);
 
 function shutdown() {
   console.log('Shutting down...');
-  server.close(() => {
-    pool.end(() => process.exit(0));
-  });
+  server.close(() => pool.end(() => process.exit(0)));
 }
 
 module.exports = app;

@@ -1,112 +1,208 @@
-// routes/auth.js
+// routes/auth.js - Fixed version with consistent JWT middleware
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
-const cookieParser = require('cookie-parser');
-const jwt = require('jsonwebtoken');
 const { pool } = require('../db');
 
-router.use(cookieParser());
+// Import the SAME JWT middleware from admin-check
+const { checkJwt } = require('../middleware/admin-check');
 
-const AUTH0_DOMAIN   = process.env.AUTH0_DOMAIN;
-const AUTH0_TOKEN_URL = `https://${AUTH0_DOMAIN}/oauth/token`;
-const AUTH0_USERINFO_URL = `https://${AUTH0_DOMAIN}/userinfo`;
-const REDIRECT_URI   = `${process.env.AUTH0_BASE_URL}/auth/callback`;
-const FRONTEND_URL   = process.env.FRONTEND_URL || '/';
-const AUDIENCE       = process.env.AUTH0_AUDIENCE;
+/**
+ * Get complete user profile from Auth0 userinfo endpoint
+ * This ensures we get the full profile including email, name, etc.
+ */
+async function getCompleteUserProfile(access_token) {
+  try {
+    console.log('🔍 Fetching complete user profile from Auth0...');
+    const response = await axios.get(`https://${process.env.AUTH0_DOMAIN}/userinfo`, {
+      headers: {
+        Authorization: `Bearer ${access_token}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000
+    });
 
-const COOKIE_NAME = 'refresh_token';
-const COOKIE_OPTIONS = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: 'None',
-  maxAge: 30 * 24 * 60 * 60 * 1000,
-  path: '/',
-};
+    console.log('✅ Full user profile received:', response.data);
+    return response.data;
+  } catch (error) {
+    console.error('❌ Failed to fetch userinfo from Auth0:', error.message);
+    console.error('❌ Auth0 response:', error.response?.data);
 
-const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || '')
-.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-
-async function exchangeAuthCodeForTokens(code) {
-  const resp = await axios.post(AUTH0_TOKEN_URL, {
-    grant_type: 'authorization_code',
-    client_id: process.env.AUTH0_CLIENT_ID,
-    client_secret: process.env.AUTH0_CLIENT_SECRET,
-    code,
-    redirect_uri: REDIRECT_URI,
-    audience: AUDIENCE,
-  }, { headers: { 'Content-Type': 'application/json' } });
-  return resp.data;
+    // Fallback to JWT decoding if userinfo endpoint fails
+    const jwt = require('jsonwebtoken');
+    const decoded = jwt.decode(access_token);
+    console.log('🔄 Falling back to JWT decoding:', decoded);
+    return decoded || {};
+  }
 }
 
-async function refreshTokens(refresh_token) {
-  const resp = await axios.post(AUTH0_TOKEN_URL, {
-    grant_type: 'refresh_token',
-    client_id: process.env.AUTH0_CLIENT_ID,
-    client_secret: process.env.AUTH0_CLIENT_SECRET,
-    refresh_token,
-    audience: AUDIENCE,
-  }, { headers: { 'Content-Type': 'application/json' } });
-  return resp.data;
+/**
+ * Extract access token from request
+ */
+function getAccessTokenFromHeader(req) {
+  if (req.headers.authorization && req.headers.authorization.split(' ')[0] === 'Bearer') {
+    return req.headers.authorization.split(' ')[1];
+  }
+  return null;
 }
 
-async function fetchUserinfo(access_token) {
-  const resp = await axios.get(AUTH0_USERINFO_URL, {
-    headers: { Authorization: `Bearer ${access_token}` },
-  });
-  return resp.data;
-}
-
-async function upsertUserFromProfile(profile) {
+async function upsertUserFromAuth0(profile) {
   const auth0_id = profile.sub;
-  const email = (profile.email || '').toLowerCase();
-  const name = profile.name || `${profile.given_name || ''} ${profile.family_name || ''}`.trim();
-  const adminByEmail = ADMIN_EMAILS.includes(email);
 
-  const result = await pool.query(`
-    INSERT INTO users (auth0_id, email, name, is_active, role, is_admin)
-    VALUES ($1,$2,$3,TRUE,COALESCE($4,'member'),$5)
-    ON CONFLICT (auth0_id)
-    DO UPDATE SET email=EXCLUDED.email, name=EXCLUDED.name, updated_at=NOW()
-    RETURNING id,email,name,role,COALESCE(is_admin,false) AS is_admin
-  `, [auth0_id,email,name, adminByEmail?'Administrator':'member', adminByEmail]);
+  // Extract provider from auth0_id (e.g., 'google-oauth2|12345' -> 'google-oauth2')
+  const auth_provider = auth0_id.split('|')[0] || 'auth0';
+  const auth_sub = auth0_id;
 
-  return { ...result.rows[0], auth0_id };
-}
+  // Use real data from Auth0 userinfo - these should now be available
+  const email = profile.email || `${auth0_id}@temp.auth0user.com`;
+  const name = profile.name || profile.nickname || 'User';
+  const first_name = profile.given_name || profile.first_name || '';
+  const last_name = profile.family_name || profile.last_name || '';
 
-async function getProfileFromAccessToken(access_token) {
-  let decoded = null;
-  try { decoded = jwt.decode(access_token) || null; } catch(_) { decoded=null; }
-  if (!decoded?.sub || !decoded?.email) return await fetchUserinfo(access_token);
-  return decoded;
+  console.log('🔄 Upserting user from Auth0 with complete profile:', {
+    auth0_id,
+    auth_provider,
+    auth_sub,
+    email,
+    name,
+    first_name,
+    last_name,
+    hasEmail: !!profile.email,
+    hasName: !!profile.name
+  });
+
+  try {
+    // Check if user exists to preserve admin status
+    const existingUser = await pool.query(
+        'SELECT id, role, is_admin FROM users WHERE auth0_id = $1',
+        [auth0_id]
+    );
+
+    let role = 'User';
+    let is_admin = false;
+
+    if (existingUser.rows.length > 0) {
+      // Preserve existing role and admin status
+      role = existingUser.rows[0].role || 'User';
+      is_admin = existingUser.rows[0].is_admin === true;
+      console.log('📋 Found existing user:', { role, is_admin });
+    }
+
+    const result = await pool.query(`
+      INSERT INTO users (
+        auth0_id, auth_provider, auth_sub, email, name, 
+        first_name, last_name, is_active, role, is_admin
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8, $9)
+      ON CONFLICT (auth0_id) 
+      DO UPDATE SET 
+        email = EXCLUDED.email, 
+        name = EXCLUDED.name,
+        first_name = EXCLUDED.first_name,
+        last_name = EXCLUDED.last_name,
+        auth_provider = EXCLUDED.auth_provider,
+        auth_sub = EXCLUDED.auth_sub,
+        updated_at = NOW()
+      RETURNING id, email, name, first_name, last_name, role, is_admin, is_active
+    `, [
+      auth0_id, auth_provider, auth_sub, email, name,
+      first_name, last_name, role, is_admin
+    ]);
+
+    const user = { ...result.rows[0], auth0_id };
+    console.log('✅ User upserted successfully:', {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      is_admin: user.is_admin
+    });
+    return user;
+  } catch (error) {
+    console.error('❌ Database error in upsertUserFromAuth0:', error);
+    throw error;
+  }
 }
 
 /* ----------------- routes ------------------ */
 
-// /auth/me now works using refresh_token cookie, sends DB flags
-router.get('/me', async (req,res)=>{
+// GET /auth/me - Get current user info using Bearer token
+router.get('/me', checkJwt, async (req, res) => {
   try {
-    const refreshToken = req.cookies[COOKIE_NAME];
-    if (!refreshToken) return res.status(401).json({ user: null });
+    console.log('🔐 /auth/me called');
 
-    const { access_token } = await refreshTokens(refreshToken);
-    const profile = await getProfileFromAccessToken(access_token);
+    // Check if token is present and valid
+    if (!req.auth || !req.auth.sub) {
+      console.log('❌ No valid JWT token found');
+      return res.status(200).json({ user: null, error: 'No valid authentication token' });
+    }
 
-    const user = await upsertUserFromProfile(profile);
+    const accessToken = getAccessTokenFromHeader(req);
+    if (!accessToken) {
+      console.log('❌ No access token found in header');
+      return res.status(401).json({ user: null, error: 'No access token provided' });
+    }
+
+    console.log('👤 Auth0 JWT payload (basic):', {
+      sub: req.auth.sub,
+      email: req.auth.email // This might still be undefined in JWT
+    });
+
+    // Get complete user profile from Auth0 userinfo endpoint
+    const completeProfile = await getCompleteUserProfile(accessToken);
+
+    if (!completeProfile.sub) {
+      console.log('❌ No user sub in complete profile');
+      return res.status(401).json({ user: null, error: 'Invalid user profile' });
+    }
+
+    console.log('👤 Complete user profile:', {
+      sub: completeProfile.sub,
+      email: completeProfile.email,
+      name: completeProfile.name,
+      given_name: completeProfile.given_name,
+      family_name: completeProfile.family_name
+    });
+
+    const user = await upsertUserFromAuth0(completeProfile);
+
+    console.log('✅ Authentication successful for user:', user.email);
 
     res.json({
       user: {
         id: user.id,
         email: user.email,
         name: user.name,
+        first_name: user.first_name,
+        last_name: user.last_name,
         role: user.role,
-        is_admin: !!user.is_admin
+        is_admin: !!user.is_admin,
+        is_active: user.is_active
       }
     });
-  } catch(err) {
-    console.error('/me error:', err.response?.data || err.message);
-    res.status(401).json({ user: null });
+  } catch (err) {
+    console.error('❌ /me error:', err.message);
+    console.error('❌ Full error details:', err);
+
+    if (err.name === 'UnauthorizedError') {
+      return res.status(401).json({
+        user: null,
+        error: 'Invalid or expired token'
+      });
+    }
+
+    res.status(500).json({
+      user: null,
+      error: 'Server error: ' + err.message
+    });
   }
+});
+
+// POST /auth/logout
+router.post('/logout', (req, res) => {
+  console.log('🚪 Clearing auth cookies');
+  res.clearCookie('refresh_token');
+  res.clearCookie('access_token');
+  res.json({ message: 'Logged out successfully' });
 });
 
 module.exports = router;
