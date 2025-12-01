@@ -49,6 +49,8 @@ const allowedOrigins = [
   'http://127.0.0.1:5173',
   'https://empowermedwellness.com',
   'https://www.empowermedwellness.com',
+  'https://empowermed-backend.onrender.com',
+  'https://empowermed-frontend.onrender.com',
 ];
 
 app.use((req, res, next) => {
