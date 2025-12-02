@@ -15,6 +15,19 @@ const checkJwtBase = jwt({
   issuer: `https://${process.env.AUTH0_DOMAIN}/`,
   algorithms: ['RS256'],
   credentialsRequired: true,
+  getToken: (req) => {
+    // Check Authorization header first (Bearer token from frontend)
+    if (req.headers.authorization && req.headers.authorization.split(' ')[0] === 'Bearer') {
+      return req.headers.authorization.split(' ')[1];
+    }
+
+    // Fall back to cookie
+    if (req.cookies && req.cookies.access_token) {
+      return req.cookies.access_token;
+    }
+
+    return null;
+  }
 });
 
 // Wrap it with proper error handling
