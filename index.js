@@ -1,9 +1,8 @@
-// index.js - Updated for api.empowermedwellness.com subdomain
+
 const express = require('express');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const csrf = require('csurf');
-const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
 const { pool, healthCheck } = require('./db');
@@ -22,16 +21,12 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const isProd = process.env.NODE_ENV === 'production';
 
-// Domain configuration
+// Domain configuration - IMPORTANT: Use proper domain for cookies
 const COOKIE_DOMAIN = isProd ? '.empowermedwellness.com' : undefined;
-const API_DOMAIN = isProd ? 'api.empowermedwellness.com' : `localhost:${PORT}`;
-const FRONTEND_DOMAIN = isProd ? 'www.empowermedwellness.com' : 'localhost:5173';
 
 console.log('🔧 Environment Configuration:');
 console.log('   NODE_ENV:', process.env.NODE_ENV);
 console.log('   Cookie Domain:', COOKIE_DOMAIN || 'localhost');
-console.log('   API Domain:', API_DOMAIN);
-console.log('   Frontend Domain:', FRONTEND_DOMAIN);
 
 /* ---------- Security hardening ---------- */
 app.set('trust proxy', 1);
@@ -40,39 +35,10 @@ app.use(
     helmet({
       contentSecurityPolicy: false,
       crossOriginEmbedderPolicy: false,
-      hsts: {
-        maxAge: 31536000,
-        includeSubDomains: true,
-        preload: true
-      }
     })
 );
 
-// Additional security headers
-app.use((req, res, next) => {
-  // Security headers
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-
-  // Remove server header
-  res.removeHeader('X-Powered-By');
-
-  next();
-});
-
-// Rate limiting
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 1000, // limit each IP to 1000 requests per windowMs
-  message: { error: 'Too many requests, please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: (req) => req.path.startsWith('/health') // Skip for health checks
-});
-
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json());
 app.use(cookieParser());
 
 /* ---------- CORS Configuration ---------- */
@@ -89,24 +55,11 @@ const allowedOrigins = [
 app.use((req, res, next) => {
   const origin = req.headers.origin;
 
-  // Set CORS headers for all origins (development) or only allowed ones (production)
-  if (origin) {
-    if (isProd) {
-      // In production, only allow specific origins
-      if (allowedOrigins.includes(origin)) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Access-Control-Allow-Credentials', 'true');
-      } else {
-        console.log('⚠️ Blocked CORS origin in production:', origin);
-      }
-    } else {
-      // In development, allow all origins for easier testing
-      res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
-    }
+  if (origin && allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
   }
 
-  // Always set these headers (they're safe)
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader(
       'Access-Control-Allow-Headers',
       'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-XSRF-TOKEN, X-CSRF-Token, X-Internal-API-Key'
@@ -115,9 +68,7 @@ app.use((req, res, next) => {
       'Access-Control-Allow-Methods',
       'GET, POST, PATCH, PUT, DELETE, OPTIONS'
   );
-  res.setHeader('Access-Control-Expose-Headers', 'XSRF-TOKEN');
 
-  // Handle preflight requests
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -126,125 +77,85 @@ app.use((req, res, next) => {
 });
 
 /* ---------- Public routes ---------- */
-app.get('/', (_req, res) => res.send('EmpowerMed API v1.0.0'));
-app.get('/health', (_req, res) => res.status(200).json({
-  status: 'ok',
-  timestamp: new Date().toISOString(),
-  environment: process.env.NODE_ENV,
-  apiDomain: API_DOMAIN
-}));
-
+app.get('/', (_req, res) => res.send('EmpowerMed backend running'));
+app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
 app.get('/health/db', async (_req, res) => {
   try {
     const ok = await healthCheck();
-    res.json({
-      db: ok ? 'up' : 'down',
-      timestamp: new Date().toISOString()
-    });
+    res.json({ db: ok ? 'up' : 'down' });
   } catch (e) {
-    res.status(500).json({
-      db: 'down',
-      error: e.message,
-      timestamp: new Date().toISOString()
-    });
+    res.status(500).json({ db: 'down', error: e.message });
   }
 });
 
 // Debug endpoint
-app.get('/debug/env', (req, res) => {
+app.get('/debug/cookies', (req, res) => {
   res.json({
-    nodeEnv: process.env.NODE_ENV,
-    backendUrl: process.env.BACKEND_URL,
-    frontendUrl: process.env.FRONTEND_URL,
-    cookieDomain: COOKIE_DOMAIN,
-    allowedOrigins,
-    request: {
-      hostname: req.hostname,
+    cookies: req.cookies,
+    headers: {
       origin: req.headers.origin,
-      secure: req.secure
+      cookie: req.headers.cookie
+    },
+    environment: {
+      NODE_ENV: process.env.NODE_ENV,
+      cookieDomain: COOKIE_DOMAIN
     }
   });
 });
 
-// Test CORS endpoint
-app.get('/test-cors', (req, res) => {
-  res.json({
-    message: 'CORS test successful',
-    origin: req.headers.origin,
-    cookieDomain: COOKIE_DOMAIN,
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Apply rate limiting to API routes
-app.use('/api/', apiLimiter);
-
-// Routes that don't need CSRF
 app.use('/internal', syncRoutes);
 app.use('/auth', authRoutes);
 app.use('/api/blog', blogRoutes);
 app.use('/api/events', eventsRoutes);
 
 /* ---------- CSRF Protection ---------- */
+// Create CSRF middleware instance
 const csrfProtection = csrf({
   cookie: {
     httpOnly: true,
-    sameSite: isProd ? 'none' : 'lax',  // Use 'none' for cross-origin in production
-    secure: isProd,                     // HTTPS only in production
+    sameSite: isProd ? 'none' : 'lax',  // 'none' for cross-origin subdomains
+    secure: isProd,                     // Must be true with sameSite: 'none'
     domain: COOKIE_DOMAIN,              // Root domain for subdomain sharing
-    path: '/',
-    maxAge: 3600000                     // 1 hour
-  },
-  ignoreMethods: ['GET', 'HEAD', 'OPTIONS'],
-  value: (req) => {
-    // Check for CSRF token in headers
-    return req.headers['x-xsrf-token'] || req.headers['x-csrf-token'];
+    path: '/'
   }
 });
 
-// Apply CSRF middleware selectively
+// Apply CSRF protection to routes that need it
 app.use((req, res, next) => {
   // Skip CSRF for these paths
-  const skipPaths = [
-    '/internal',
-    '/auth',
-    '/api/blog',
-    '/api/events',
-    '/csrf-token',
-    '/health',
-    '/debug',
-    '/test-cors'
-  ];
-
-  if (skipPaths.some(path => req.path.startsWith(path))) {
+  if (
+      req.path.startsWith('/internal') ||
+      req.path.startsWith('/auth') ||
+      req.path.startsWith('/api/blog') ||
+      req.path.startsWith('/api/events') ||
+      req.path === '/csrf-token' ||
+      req.path === '/health' ||
+      req.path === '/debug/cookies'
+  ) {
     return next();
   }
 
   return csrfProtection(req, res, next);
 });
 
-// CSRF token endpoint
-app.get('/csrf-token', (req, res) => {
+// CSRF token endpoint - MUST use csrfProtection to generate token
+app.get('/csrf-token', csrfProtection, (req, res) => {
   const token = req.csrfToken();
 
-  console.log('🔐 Generating CSRF token for:', req.headers.origin);
+  console.log('🔐 Generated CSRF token for origin:', req.headers.origin);
 
   // Set cookie that JavaScript can read
   res.cookie('XSRF-TOKEN', token, {
-    httpOnly: false,        // JavaScript can read this
-    sameSite: isProd ? 'none' : 'lax',  // Match CSRF cookie settings
-    secure: isProd,         // HTTPS only
-    domain: COOKIE_DOMAIN,  // Root domain
-    path: '/',
-    maxAge: 3600000,
-    encode: String
+    httpOnly: false,
+    sameSite: isProd ? 'none' : 'lax',
+    secure: isProd,
+    domain: COOKIE_DOMAIN,
+    path: '/'
   });
 
   res.json({
     csrfToken: token,
-    timestamp: new Date().toISOString(),
-    expiresIn: 3600,
-    cookieDomain: COOKIE_DOMAIN
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -253,8 +164,7 @@ app.post('/csrf-test', csrfProtection, (req, res) => {
   res.json({
     success: true,
     message: 'CSRF validation successful',
-    timestamp: new Date().toISOString(),
-    receivedFrom: req.headers.origin
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -264,16 +174,6 @@ app.use('/api/admin', adminRoutes);
 app.use('/api', catalogRouter);
 app.use('/api/education', educationRouter);
 
-/* ---------- Database connection ---------- */
-(async () => {
-  try {
-    const { rows } = await pool.query('SELECT NOW() AS now');
-    console.log('✅ Database connected @', rows[0].now);
-  } catch (err) {
-    console.error('❌ Database connection error:', err.message);
-  }
-})();
-
 /* ---------- Error Handling ---------- */
 app.use((err, req, res, next) => {
   console.error('🚨 Error:', {
@@ -281,42 +181,31 @@ app.use((err, req, res, next) => {
     code: err.code,
     message: err.message,
     path: req.path,
-    method: req.method,
-    origin: req.headers.origin,
     timestamp: new Date().toISOString()
   });
 
   if (err.name === 'UnauthorizedError') {
-    return res.status(401).json({
-      error: 'Invalid or missing token',
-      details: err.message
-    });
+    return res.status(401).json({ error: 'Invalid or missing token' });
   }
 
   if (err.code === 'EBADCSRFTOKEN') {
+    console.log('🔍 CSRF Error Details:', {
+      headers: {
+        'x-xsrf-token': req.headers['x-xsrf-token'] ? 'present' : 'missing',
+        cookie: req.headers.cookie ? 'present' : 'missing'
+      },
+      cookies: req.cookies
+    });
+
     return res.status(403).json({
       error: 'Invalid CSRF token',
-      details: {
-        receivedToken: req.headers['x-xsrf-token'] ? 'present' : 'missing',
-        path: req.path,
-        method: req.method
-      }
+      details: 'Please refresh the page'
     });
   }
 
   res.status(err.status || 500).json({
-    error: 'Internal server error',
-    details: isProd ? 'Please try again later' : err.message
-  });
-});
-
-/* ---------- 404 Handler ---------- */
-app.use((req, res) => {
-  res.status(404).json({
-    error: 'Not Found',
-    path: req.path,
-    method: req.method,
-    timestamp: new Date().toISOString()
+    error: 'Server error',
+    details: isProd ? 'Internal server error' : err.message
   });
 });
 
@@ -330,22 +219,15 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 🍪 Cookie Domain: ${COOKIE_DOMAIN || 'localhost'}
 🔒 Secure Cookies: ${isProd}
 🎯 Allowed Origins: ${allowedOrigins.join(', ')}
-📊 Database: Connected
   `);
 });
 
-// Graceful shutdown
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
 function shutdown() {
-  console.log('🛑 Shutting down gracefully...');
-  server.close(() => {
-    pool.end(() => {
-      console.log('✅ Shutdown complete');
-      process.exit(0);
-    });
-  });
+  console.log('Shutting down...');
+  server.close(() => pool.end(() => process.exit(0)));
 }
 
 module.exports = app;
