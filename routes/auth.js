@@ -102,7 +102,7 @@ async function upsertUserFromAuth0(profile) {
         auth_provider = EXCLUDED.auth_provider,
         auth_sub = EXCLUDED.auth_sub,
         updated_at = NOW()
-      RETURNING id, email, name, first_name, last_name, role, is_admin, is_active
+      RETURNING id, email, name, first_name, last_name, role, is_admin, is_active, created_at, updated_at, auth_provider
     `, [
       auth0_id, auth_provider, auth_sub, email, name,
       first_name, last_name, role, is_admin
@@ -114,7 +114,9 @@ async function upsertUserFromAuth0(profile) {
       email: user.email,
       name: user.name,
       role: user.role,
-      is_admin: user.is_admin
+      is_admin: user.is_admin,
+      created_at: user.created_at,
+      updated_at: user.updated_at
     });
     return user;
   } catch (error) {
@@ -144,7 +146,7 @@ router.get('/me', checkJwt, async (req, res) => {
 
     console.log('👤 Auth0 JWT payload (basic):', {
       sub: req.auth.sub,
-      email: req.auth.email // This might still be undefined in JWT
+      email: req.auth.email
     });
 
     // Get complete user profile from Auth0 userinfo endpoint
@@ -176,7 +178,10 @@ router.get('/me', checkJwt, async (req, res) => {
         last_name: user.last_name,
         role: user.role,
         is_admin: !!user.is_admin,
-        is_active: user.is_active
+        is_active: user.is_active,
+        created_at: user.created_at,
+        updated_at: user.updated_at,
+        auth_provider: user.auth_provider
       }
     });
   } catch (err) {
