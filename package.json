@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@notionhq/client": "^2.2.5",
+    "@sendgrid/mail": "^8.1.6",
     "axios": "^1.13.2",
     "bcryptjs": "^3.0.2",
     "cookie-parser": "^1.4.7",

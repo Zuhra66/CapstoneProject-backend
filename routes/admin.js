@@ -420,13 +420,46 @@ router.get('/debug-user/:userId', async (req, res) => {
 
 router.get('/dashboard-stats', async (req, res) => {
   try {
+    // Get users stats
     const totalUsers = await dbPool.query('SELECT COUNT(*) FROM public.users');
+    const activeUsers = await dbPool.query('SELECT COUNT(*) FROM public.users WHERE is_active = true');
+    const newUsersThisMonth = await dbPool.query(`
+      SELECT COUNT(*) 
+      FROM public.users 
+      WHERE created_at >= date_trunc('month', CURRENT_DATE)
+    `);
+
+    // ✅ ADD NEWSLETTER STATS
+    let newsletterTotal = 0;
+    let newsletterActive = 0;
+
+    try {
+      const newsletterResult = await dbPool.query(`
+        SELECT 
+          COUNT(*) as total,
+          SUM(CASE WHEN active THEN 1 ELSE 0 END) as active
+        FROM newsletter_subscribers
+      `);
+
+      if (newsletterResult.rows.length > 0) {
+        newsletterTotal = parseInt(newsletterResult.rows[0].total) || 0;
+        newsletterActive = parseInt(newsletterResult.rows[0].active) || 0;
+      }
+    } catch (newsletterError) {
+      console.log('Newsletter stats not available:', newsletterError.message);
+      // Newsletter table might not exist yet, that's okay
+    }
 
     const stats = {
       users: {
         total: parseInt(totalUsers.rows[0].count),
-        active: 0,
-        newThisMonth: 0
+        active: parseInt(activeUsers.rows[0].count),
+        newThisMonth: parseInt(newUsersThisMonth.rows[0].count)
+      },
+      // ✅ Newsletter stats added here
+      newsletter: {
+        total: newsletterTotal,
+        active: newsletterActive
       },
       appointments: {
         total: 0,
@@ -452,15 +485,37 @@ router.get('/dashboard-stats', async (req, res) => {
     await logAdminAction(req.adminUser.id, 'VIEW_DASHBOARD_STATS', null, {}, req);
     res.json(stats);
   } catch (error) {
+    console.error('Dashboard stats error:', error);
+
+    // Updated fallback stats with newsletter
     const fallbackStats = {
-      users: { total: 1, active: 1, newThisMonth: 0 },
-      appointments: { total: 0, pending: 0, today: 0 },
+      users: {
+        total: 1,
+        active: 1,
+        newThisMonth: 0
+      },
+      // ✅ Newsletter added to fallback
+      newsletter: {
+        total: 0,
+        active: 0
+      },
+      appointments: {
+        total: 0,
+        pending: 0,
+        today: 0
+      },
       products: { total: 0 },
       categories: { total: 0 },
       blog: { total: 0 },
-      education: { videos: 0, articles: 0 },
+      education: {
+        videos: 0,
+        articles: 0
+      },
       events: { upcoming: 0 },
-      memberships: { plans: 0, active: 0 },
+      memberships: {
+        plans: 0,
+        active: 0
+      },
       messages: { total: 0 },
       audit: { total: 0 }
     };

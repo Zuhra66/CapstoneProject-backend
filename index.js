@@ -1,4 +1,3 @@
-
 const express = require('express');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
@@ -20,6 +19,7 @@ const eventsRoutes    = require('./routes/events');
 const app = express();
 const PORT = process.env.PORT || 5000;
 const isProd = process.env.NODE_ENV === 'production';
+const newsletterRoutes = require('./routes/newsletter');
 
 // Domain configuration - IMPORTANT: Use proper domain for cookies
 const COOKIE_DOMAIN = isProd ? '.empowermedwellness.com' : undefined;
@@ -52,7 +52,8 @@ const allowedOrigins = [
   'https://empowermed-frontend.onrender.com',
 ];
 
-app.use((req, res, next) => {
+// CORS middleware function
+const corsMiddleware = (req, res, next) => {
   const origin = req.headers.origin;
 
   if (origin && allowedOrigins.includes(origin)) {
@@ -69,15 +70,19 @@ app.use((req, res, next) => {
       'GET, POST, PATCH, PUT, DELETE, OPTIONS'
   );
 
+  // Handle OPTIONS requests (preflight)
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
   next();
-});
+};
+
+// Apply CORS to all routes
+app.use(corsMiddleware);
 
 /* ---------- Public routes ---------- */
-app.get('/', (_req, res) => res.send('EmpowerMed backend running'));
+app.get('/', (_req, res) => res.send('{ "status": "ok" }\n'));
 app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
 app.get('/health/db', async (_req, res) => {
   try {
@@ -103,11 +108,6 @@ app.get('/debug/cookies', (req, res) => {
   });
 });
 
-app.use('/internal', syncRoutes);
-app.use('/auth', authRoutes);
-app.use('/api/blog', blogRoutes);
-app.use('/api/events', eventsRoutes);
-
 /* ---------- CSRF Protection ---------- */
 // Create CSRF middleware instance
 const csrfProtection = csrf({
@@ -130,7 +130,10 @@ app.use((req, res, next) => {
       req.path.startsWith('/api/events') ||
       req.path === '/csrf-token' ||
       req.path === '/health' ||
-      req.path === '/debug/cookies'
+      req.path === '/health/db' ||
+      req.path === '/debug/cookies' ||
+      req.path === '/' ||
+      req.path.startsWith('/api/newsletter/subscribe') // ⚠️ FIX: Allow newsletter subscription without CSRF
   ) {
     return next();
   }
@@ -169,6 +172,14 @@ app.post('/csrf-test', csrfProtection, (req, res) => {
 });
 
 /* ---------- API routes ---------- */
+// Newsletter routes - must be before CSRF for the subscribe endpoint
+app.use('/api/newsletter', newsletterRoutes); // ⚠️ MOVED: Put newsletter BEFORE profile routes
+
+app.use('/internal', syncRoutes);
+app.use('/auth', authRoutes);
+app.use('/api/blog', blogRoutes);
+app.use('/api/events', eventsRoutes);
+
 app.use('/api/profile', profileRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api', catalogRouter);
