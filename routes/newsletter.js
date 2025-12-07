@@ -22,27 +22,8 @@ const FRONTEND_BASE = process.env.FRONTEND_URL ||
         ? 'https://www.empowermedwellness.com'
         : 'http://localhost:5173');
 
-// Logo URL - try different possible locations
-const getLogoUrl = () => {
-  const base = process.env.FRONTEND_URL ||
-      (process.env.NODE_ENV === 'production'
-          ? 'https://www.empowermedwellness.com'
-          : 'http://localhost:5173');
-
-  // Try different possible locations
-  const possiblePaths = [
-    '/logo.png',                    // Root directory
-    '/images/logo.png',             // Images directory
-    '/assets/logo.png',             // Assets directory
-    '/static/logo.png',             // Static directory
-    '/public/logo.png'              // Public directory
-  ];
-
-  // Return the base URL - you'll need to test which path works
-  return `${base}/logo.png`;
-};
-
-const LOGO_URL = getLogoUrl();
+// Logo URL - confirmed location
+const LOGO_URL = `${FRONTEND_BASE}/assets/logo.png`;
 
 const EMAIL_CONFIG = {
   fromEmail: process.env.EMAIL_FROM || 'EmpowerMEddev@gmail.com',

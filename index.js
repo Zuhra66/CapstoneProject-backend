@@ -7,6 +7,7 @@ require('dotenv').config();
 const { pool, healthCheck } = require('./db');
 const { checkJwt, attachAdminUser, requireAdmin } = require('./middleware/admin-check');
 
+// Import routes
 const profileRoutes   = require('./routes/profile');
 const authRoutes      = require('./routes/auth');
 const syncRoutes      = require('./routes/sync');
@@ -15,12 +16,15 @@ const catalogRouter   = require('./routes/catalog');
 const educationRouter = require('./routes/education');
 const blogRoutes      = require('./routes/blog');
 const eventsRoutes    = require('./routes/events');
+const newsletterRoutes = require('./routes/newsletter');
+const auditLogsRoutes = require('./routes/auditLogs');  // NEW: Audit logs routes
+
+// Import audit middleware
+const auditMiddleware = require('./middleware/auditMiddleware');  // NEW: Audit middleware
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 const isProd = process.env.NODE_ENV === 'production';
-const newsletterRoutes = require('./routes/newsletter');
-
 
 // Domain configuration - IMPORTANT: Use proper domain for cookies
 const COOKIE_DOMAIN = isProd ? '.empowermedwellness.com' : undefined;
@@ -121,26 +125,34 @@ const csrfProtection = csrf({
   }
 });
 
-// Apply CSRF protection to routes that need it
-app.use((req, res, next) => {
-  // Skip CSRF for these paths
+// Create a middleware that skips CSRF for specific routes
+const csrfSkipMiddleware = (req, res, next) => {
+  // Skip CSRF for these paths - CHECK FULL URL PATH
+  const fullPath = req.originalUrl || req.url;
+
   if (
-      req.path.startsWith('/internal') ||
-      req.path.startsWith('/auth') ||
-      req.path.startsWith('/api/blog') ||
-      req.path.startsWith('/api/events') ||
-      req.path === '/csrf-token' ||
-      req.path === '/health' ||
-      req.path === '/health/db' ||
-      req.path === '/debug/cookies' ||
-      req.path === '/' ||
-      req.path.startsWith('/api/newsletter/subscribe') // ⚠️ FIX: Allow newsletter subscription without CSRF
+      fullPath.startsWith('/internal') ||
+      fullPath.startsWith('/auth') ||
+      fullPath.startsWith('/api/blog') ||
+      fullPath.startsWith('/api/events') ||
+      fullPath === '/csrf-token' ||
+      fullPath === '/health' ||
+      fullPath === '/health/db' ||
+      fullPath === '/debug/cookies' ||
+      fullPath === '/' ||
+      fullPath.startsWith('/api/newsletter') ||
+      fullPath.startsWith('/api/audit')  // NEW: Skip CSRF for audit logs
   ) {
+    console.log(`🔓 Skipping CSRF for: ${fullPath}`);
     return next();
   }
 
+  console.log(`🔐 Applying CSRF for: ${fullPath}`);
   return csrfProtection(req, res, next);
-});
+};
+
+// Apply the CSRF skip middleware BEFORE mounting routes
+app.use(csrfSkipMiddleware);
 
 // CSRF token endpoint - MUST use csrfProtection to generate token
 app.get('/csrf-token', csrfProtection, (req, res) => {
@@ -172,19 +184,25 @@ app.post('/csrf-test', csrfProtection, (req, res) => {
   });
 });
 
-/* ---------- API routes ---------- */
-// Newsletter routes - must be before CSRF for the subscribe endpoint
-app.use('/api/newsletter', newsletterRoutes); // ⚠️ MOVED: Put newsletter BEFORE profile routes
+/* ---------- Apply audit middleware ---------- */
+// Apply audit middleware to all routes after authentication
+// Note: This should come AFTER CSRF but BEFORE routes
+app.use(auditMiddleware);
 
+/* ---------- API routes ---------- */
+// Mount all API routes AFTER CSRF and audit middleware
+app.use('/api/newsletter', newsletterRoutes);
 app.use('/internal', syncRoutes);
 app.use('/auth', authRoutes);
 app.use('/api/blog', blogRoutes);
 app.use('/api/events', eventsRoutes);
-
 app.use('/api/profile', profileRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api', catalogRouter);
 app.use('/api/education', educationRouter);
+
+// NEW: Add audit logs routes (protected by admin middleware)
+app.use('/api/audit', auditLogsRoutes);
 
 /* ---------- Error Handling ---------- */
 app.use((err, req, res, next) => {
@@ -193,6 +211,7 @@ app.use((err, req, res, next) => {
     code: err.code,
     message: err.message,
     path: req.path,
+    originalUrl: req.originalUrl,
     timestamp: new Date().toISOString()
   });
 
@@ -202,6 +221,8 @@ app.use((err, req, res, next) => {
 
   if (err.code === 'EBADCSRFTOKEN') {
     console.log('🔍 CSRF Error Details:', {
+      path: req.path,
+      originalUrl: req.originalUrl,
       headers: {
         'x-xsrf-token': req.headers['x-xsrf-token'] ? 'present' : 'missing',
         cookie: req.headers.cookie ? 'present' : 'missing'
@@ -211,13 +232,15 @@ app.use((err, req, res, next) => {
 
     return res.status(403).json({
       error: 'Invalid CSRF token',
-      details: 'Please refresh the page'
+      details: 'Please refresh the page',
+      path: req.originalUrl
     });
   }
 
   res.status(err.status || 500).json({
     error: 'Server error',
-    details: isProd ? 'Internal server error' : err.message
+    details: isProd ? 'Internal server error' : err.message,
+    path: req.originalUrl
   });
 });
 
@@ -228,6 +251,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 📡 Port: ${PORT}
 🌐 Environment: ${process.env.NODE_ENV}
 🔐 CSRF Protection: Enabled
+🔍 Audit Logging: Enabled
 🍪 Cookie Domain: ${COOKIE_DOMAIN || 'localhost'}
 🔒 Secure Cookies: ${isProd}
 🎯 Allowed Origins: ${allowedOrigins.join(', ')}
