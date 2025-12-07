@@ -1,78 +1,116 @@
-// routes/newsletter.js - UPDATED WITH ALL FIXES
+// routes/newsletter.js - PRODUCTION READY
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
 const { pool } = require('../db');
 const { checkJwt, attachAdminUser, requireAdmin } = require('../middleware/admin-check');
 
-// ==================== SENDGRID EMAIL INTEGRATION ====================
 const sgMail = require('@sendgrid/mail');
 
-// Initialize SendGrid with API key from environment variables
 if (process.env.SENDGRID_API_KEY) {
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-  console.log('✅ SendGrid initialized');
-} else {
-  console.log('⚠️  SENDGRID_API_KEY not found in environment variables');
-  console.log('⚠️  Emails will be logged to console but not sent');
 }
 
-// Email configuration - UPDATED WITH CORRECT NAME
 const EMAIL_CONFIG = {
   fromEmail: process.env.EMAIL_FROM || 'EmpowerMEddev@gmail.com',
-  fromName: process.env.EMAIL_FROM_NAME || 'EmpowerMed',
+  fromName: process.env.EMAIL_FROM_NAME || 'EmpowerMEd',
   replyTo: process.env.EMAIL_REPLY_TO || 'EmpowerMEddev@gmail.com'
 };
 
-// Base URL for images
 const BASE_URL = 'https://www.empowermedwellness.com';
-const LOGO_URL = `${BASE_URL}/images/logo.png`; // Make sure this logo exists at this URL
+const LOGO_URL = `${BASE_URL}/images/logo.png`;
 
-/**
- * Generate a secure random token
- */
-const generateToken = () => {
-  return crypto.randomBytes(32).toString('hex');
-};
+const generateToken = () => crypto.randomBytes(32).toString('hex');
 
-/**
- * Send verification email via SendGrid
- */
+router.get('/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    service: 'newsletter',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'production'
+  });
+});
+
+if (process.env.NODE_ENV !== 'production') {
+  router.get('/test', (req, res) => {
+    res.json({
+      message: 'Newsletter API is working!',
+      environment: 'development',
+      routes: [
+        'POST /api/newsletter/subscribe',
+        'GET /api/newsletter/verify/:token',
+        'GET /api/newsletter/unsubscribe/:token',
+        'GET /api/newsletter/health'
+      ]
+    });
+  });
+
+  router.get('/verify/test', (req, res) => {
+    res.send(`<!DOCTYPE html>
+      <html>
+      <head>
+        <title>Test Verification - EmpowerMEd</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f8f9fa; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+          h1 { color: #3D52A0; margin-bottom: 20px; }
+          .success { color: #28a745; font-size: 48px; margin: 20px 0; }
+          .btn { display: inline-block; background: #3D52A0; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; margin-top: 20px; font-weight: bold; }
+          .logo-img { max-width: 150px; height: auto; margin: 20px auto; display: block; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img" onerror="this.style.display='none'">
+          <div class="success">✅</div>
+          <h1>Verification Route is Working!</h1>
+          <p>This is a development-only test route.</p>
+          <p><strong>Logo URL:</strong> ${LOGO_URL}</p>
+          <p><strong>Environment:</strong> development</p>
+          <a href="http://localhost:5173" class="btn">Return to Website</a>
+        </div>
+      </body>
+      </html>`);
+  });
+}
+
 const sendVerificationEmail = async (email, name, token) => {
   try {
-    const verificationLink = `https://www.empowermedwellness.com/api/newsletter/verify/${token}`;
+    const verificationLink = `${BASE_URL}/api/newsletter/verify/${token}`;
 
     const msg = {
       to: email,
-      from: {
-        email: EMAIL_CONFIG.fromEmail,
-        name: EMAIL_CONFIG.fromName
-      },
+      from: { email: EMAIL_CONFIG.fromEmail, name: EMAIL_CONFIG.fromName },
       replyTo: EMAIL_CONFIG.replyTo,
-      subject: 'Please confirm your subscription to EmpowerMed',
-      html: `
-        <!DOCTYPE html>
+      subject: 'Please confirm your subscription to EmpowerMEd',
+      html: `<!DOCTYPE html>
         <html>
         <head>
           <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
           <style>
-            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; }
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 0; }
             .header { background: linear-gradient(135deg, #3D52A0, #7091E6); padding: 30px; text-align: center; }
             .content { padding: 30px; background: #f9f9f9; }
-            .footer { padding: 20px; text-align: center; color: #666; font-size: 12px; }
-            .button { display: inline-block; background: #3D52A0; color: white; padding: 12px 24px; 
-                     text-decoration: none; border-radius: 6px; margin: 20px 0; }
-            .logo-img { max-width: 200px; height: auto; }
-            .brand { font-family: 'Aboreto', cursive; color: white; font-size: 24px; font-weight: bold; }
+            .footer { padding: 20px; text-align: center; color: #666; font-size: 12px; background: white; }
+            .button { display: inline-block; background: #3D52A0; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; margin: 20px 0; font-weight: bold; font-size: 16px; }
+            .logo-img { max-width: 150px; height: auto; margin-bottom: 15px; }
+            .brand { font-family: 'Aboreto', cursive; color: white; font-size: 24px; font-weight: bold; margin-bottom: 10px; }
+            @media (max-width: 600px) {
+              .header { padding: 20px; }
+              .content { padding: 20px; }
+              .button { padding: 12px 24px; font-size: 14px; }
+            }
           </style>
         </head>
         <body>
           <div class="header">
-            <div class="brand">EmpowerMed</div>
-            <img src="${LOGO_URL}" alt="EmpowerMed Logo" class="logo-img" style="max-width: 150px; margin-top: 20px;">
+            <div class="brand">EmpowerMEd</div>
+            <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img">
           </div>
           <div class="content">
-            <h2>Welcome to EmpowerMed!</h2>
+            <h2>Welcome to EmpowerMEd!</h2>
             <p>Hello ${name || 'there'},</p>
             <p>Thank you for subscribing to our wellness newsletter. To complete your subscription and start receiving our updates, please confirm your email address:</p>
             <p style="text-align: center;">
@@ -82,161 +120,121 @@ const sendVerificationEmail = async (email, name, token) => {
             <p><strong>This link will expire in 24 hours.</strong></p>
           </div>
           <div class="footer">
-            <p>© ${new Date().getFullYear()} EmpowerMed LLC. All rights reserved.</p>
+            <p>© ${new Date().getFullYear()} EmpowerMEd LLC. All rights reserved.</p>
             <p>3600 Sisk Road, Suite 2D, Modesto, CA, USA</p>
           </div>
         </body>
-        </html>
-      `,
-      text: `Welcome to EmpowerMed!\n\nPlease confirm your subscription by visiting:\n${verificationLink}\n\nIf you didn't request this, please ignore this email.\n\nThis link will expire in 24 hours.`
+        </html>`,
+      text: `Welcome to EmpowerMEd!\n\nPlease confirm your subscription by visiting:\n${verificationLink}\n\nIf you didn't request this, please ignore this email.\n\nThis link will expire in 24 hours.`
     };
 
-    // Send email via SendGrid
     if (process.env.SENDGRID_API_KEY) {
       await sgMail.send(msg);
-      console.log(`✅ Verification email sent to: ${email}`);
       return { success: true, message: 'Verification email sent', email };
     } else {
-      // Fallback: log to console
       console.log(`[EMAIL LOG] Verification link for ${email}: ${verificationLink}`);
-      return { success: true, message: 'Verification email logged (SendGrid not configured)', email };
+      return { success: true, message: 'Verification email logged', email };
     }
 
   } catch (error) {
-    console.error('❌ SendGrid error:', error.response?.body || error.message);
-
-    // Fallback: log to console but still return success
-    console.log(`[EMAIL FALLBACK] Verification link for ${email}: https://www.empowermedwellness.com/api/newsletter/verify/${token}`);
-
-    // Return success even if email fails - don't break the user experience
-    return {
-      success: true,
-      message: 'Email queued',
-      email: email,
-      fallback: true,
-      verificationLink: `https://www.empowermedwellness.com/api/newsletter/verify/${token}`
-    };
+    console.error('SendGrid error:', error.response?.body || error.message);
+    return { success: true, message: 'Email queued', email, fallback: true };
   }
 };
 
-/**
- * Send welcome email via SendGrid
- */
 const sendWelcomeEmail = async (email, name, unsubscribeToken) => {
   try {
-    const unsubscribeLink = `https://www.empowermedwellness.com/api/newsletter/unsubscribe/${unsubscribeToken}`;
+    const unsubscribeLink = `${BASE_URL}/api/newsletter/unsubscribe/${unsubscribeToken}`;
 
     const msg = {
       to: email,
-      from: {
-        email: EMAIL_CONFIG.fromEmail,
-        name: EMAIL_CONFIG.fromName
-      },
+      from: { email: EMAIL_CONFIG.fromEmail, name: EMAIL_CONFIG.fromName },
       replyTo: EMAIL_CONFIG.replyTo,
-      subject: 'Welcome to EmpowerMed - Your Subscription is Confirmed!',
-      html: `
-        <!DOCTYPE html>
+      subject: 'Welcome to EmpowerMEd - Your Subscription is Confirmed!',
+      html: `<!DOCTYPE html>
         <html>
         <head>
           <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
           <style>
-            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; }
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 0; }
             .header { background: linear-gradient(135deg, #3D52A0, #7091E6); padding: 30px; text-align: center; }
             .content { padding: 30px; background: #f9f9f9; }
-            .footer { padding: 20px; text-align: center; color: #666; font-size: 12px; }
-            .logo-img { max-width: 200px; height: auto; }
-            .brand { font-family: 'Aboreto', cursive; color: white; font-size: 24px; font-weight: bold; }
+            .footer { padding: 20px; text-align: center; color: #666; font-size: 12px; background: white; }
+            .logo-img { max-width: 150px; height: auto; margin-bottom: 15px; }
+            .brand { font-family: 'Aboreto', cursive; color: white; font-size: 24px; font-weight: bold; margin-bottom: 10px; }
             .features { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
-            .feature-item { margin: 10px 0; }
+            .feature-item { margin: 10px 0; padding-left: 20px; position: relative; }
+            .feature-item:before { content: "✓"; color: #28a745; position: absolute; left: 0; }
             .unsubscribe { font-size: 12px; color: #666; margin-top: 30px; }
+            @media (max-width: 600px) {
+              .header { padding: 20px; }
+              .content { padding: 20px; }
+              .features { padding: 15px; }
+            }
           </style>
         </head>
         <body>
           <div class="header">
-            <div class="brand">EmpowerMed</div>
-            <img src="${LOGO_URL}" alt="EmpowerMed Logo" class="logo-img" style="max-width: 150px; margin-top: 20px;">
+            <div class="brand">EmpowerMEd</div>
+            <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img">
           </div>
           <div class="content">
             <h2>🎉 Welcome to Our Wellness Community!</h2>
             <p>Hello ${name || 'wellness enthusiast'},</p>
-            <p>Your subscription to EmpowerMed updates has been confirmed. We're excited to have you join our community!</p>
+            <p>Your subscription to EmpowerMEd updates has been confirmed. We're excited to have you join our community!</p>
             
             <div class="features">
               <h3>What to expect:</h3>
-              <div class="feature-item">✓ Weekly wellness tips and insights</div>
-              <div class="feature-item">✓ Exclusive content and resources</div>
-              <div class="feature-item">✓ Updates on events and workshops</div>
-              <div class="feature-item">✓ Special offers for subscribers</div>
-              <div class="feature-item">✓ Mental, physical, and nutritional wellness guidance</div>
+              <div class="feature-item">Weekly wellness tips and insights</div>
+              <div class="feature-item">Exclusive content and resources</div>
+              <div class="feature-item">Updates on events and workshops</div>
+              <div class="feature-item">Special offers for subscribers</div>
+              <div class="feature-item">Mental, physical, and nutritional wellness guidance</div>
             </div>
             
             <p>Stay tuned for our next update, and remember: wellness is a journey, not a destination.</p>
             
             <p>With gratitude,<br>
-            <strong>Dr. Diana Galván & The EmpowerMed Team</strong></p>
+            <strong>Dr. Diana Galván & The EmpowerMEd Team</strong></p>
             
             <div class="unsubscribe">
               <p><small>You can <a href="${unsubscribeLink}">unsubscribe</a> anytime if you change your mind.</small></p>
             </div>
           </div>
           <div class="footer">
-            <p>© ${new Date().getFullYear()} EmpowerMed LLC. All rights reserved.</p>
+            <p>© ${new Date().getFullYear()} EmpowerMEd LLC. All rights reserved.</p>
             <p>3600 Sisk Road, Suite 2D, Modesto, CA, USA</p>
           </div>
         </body>
-        </html>
-      `,
-      text: `Welcome to EmpowerMed!\n\nYour subscription has been confirmed. You'll now receive:\n- Weekly wellness tips\n- Exclusive content\n- Event updates\n- Special offers\n\nStay healthy and empowered!\n\nThe EmpowerMed Team\n\nYou can unsubscribe anytime: ${unsubscribeLink}`
+        </html>`,
+      text: `Welcome to EmpowerMEd!\n\nYour subscription has been confirmed. You'll now receive:\n- Weekly wellness tips\n- Exclusive content\n- Event updates\n- Special offers\n\nStay healthy and empowered!\n\nThe EmpowerMEd Team\n\nYou can unsubscribe anytime: ${unsubscribeLink}`
     };
 
-    // Send email via SendGrid
     if (process.env.SENDGRID_API_KEY) {
       await sgMail.send(msg);
-      console.log(`✅ Welcome email sent to: ${email}`);
       return { success: true, message: 'Welcome email sent', email };
     } else {
-      // Fallback: log to console
       console.log(`[EMAIL LOG] Welcome email would be sent to: ${email}`);
-      console.log(`[EMAIL LOG] Unsubscribe link: ${unsubscribeLink}`);
-      return { success: true, message: 'Welcome email logged (SendGrid not configured)', email };
+      return { success: true, message: 'Welcome email logged', email };
     }
 
   } catch (error) {
-    console.error('❌ SendGrid error:', error.response?.body || error.message);
-
-    // Fallback: log to console but still return success
-    console.log(`[EMAIL FALLBACK] Welcome email would be sent to: ${email}`);
-
-    return {
-      success: true,
-      message: 'Welcome email queued',
-      email: email
-    };
+    console.error('SendGrid error:', error.response?.body || error.message);
+    return { success: true, message: 'Welcome email queued', email };
   }
 };
 
-// ==================== PUBLIC ROUTES ====================
-
-/**
- * PUBLIC ROUTE: Subscribe to newsletter (Double Opt-in)
- */
 router.post('/subscribe', async (req, res) => {
   try {
     const { email, name } = req.body;
-
-    // Validate email
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({
-        success: false,
-        error: 'INVALID_EMAIL',
-        message: 'Please provide a valid email address'
-      });
+      return res.status(400).json({ success: false, error: 'INVALID_EMAIL', message: 'Please provide a valid email address' });
     }
 
     const lowerEmail = email.toLowerCase().trim();
     const source = req.headers.referer || 'website_footer';
 
-    // Check if already subscribed
     const existing = await pool.query(
         `SELECT id, active, verified_at FROM newsletter_subscribers WHERE email = $1`,
         [lowerEmail]
@@ -244,217 +242,122 @@ router.post('/subscribe', async (req, res) => {
 
     if (existing.rows.length > 0) {
       const subscriber = existing.rows[0];
-
-      // If already verified and active
       if (subscriber.verified_at && subscriber.active) {
-        return res.status(200).json({
-          success: true,
-          verified: true,
-          message: 'You are already subscribed to our newsletter!'
-        });
+        return res.status(200).json({ success: true, verified: true, message: 'You are already subscribed to our newsletter!' });
       }
 
-      // If pending verification, resend verification
       if (!subscriber.verified_at) {
         const verificationToken = generateToken();
-        const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
-
+        const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
         await pool.query(
-            `UPDATE newsletter_subscribers 
-           SET verification_token = $1, 
-               verification_expires = $2,
-               name = COALESCE($3, name),
-               active = false  // FIX: Keep as inactive until verified
-           WHERE id = $4`,
+            `UPDATE newsletter_subscribers SET verification_token = $1, verification_expires = $2, name = COALESCE($3, name), active = false WHERE id = $4`,
             [verificationToken, verificationExpires, name, subscriber.id]
         );
-
-        // Send verification email
         const emailResult = await sendVerificationEmail(lowerEmail, name, verificationToken);
-
-        return res.status(200).json({
-          success: true,
-          verified: false,
-          message: 'Verification email resent. Please check your inbox to confirm your subscription.',
-          emailResult: emailResult
-        });
+        return res.status(200).json({ success: true, verified: false, message: 'Verification email resent. Please check your inbox to confirm your subscription.', emailResult });
       }
     }
 
-    // New subscriber - create pending subscription (INACTIVE until verified)
     const verificationToken = generateToken();
-    const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     try {
-      // Insert as INACTIVE (active = false) until verified
       const result = await pool.query(
-          `INSERT INTO newsletter_subscribers 
-         (email, name, source, verification_token, verification_expires, active) 
-         VALUES ($1, $2, $3, $4, $5, false) 
-         RETURNING id`,
+          `INSERT INTO newsletter_subscribers (email, name, source, verification_token, verification_expires, active) VALUES ($1, $2, $3, $4, $5, false) RETURNING id`,
           [lowerEmail, name, source, verificationToken, verificationExpires]
       );
 
-      const subscriberId = result.rows[0].id;
-
-      // Send verification email
       const emailResult = await sendVerificationEmail(lowerEmail, name, verificationToken);
-
-      console.log(`✅ New newsletter subscriber (pending): ${lowerEmail}`);
-
-      // Return success response
-      return res.status(200).json({
-        success: true,
-        verified: false,
-        message: 'Thank you! Please check your email to confirm your subscription.',
-        emailResult: emailResult
-      });
+      return res.status(200).json({ success: true, verified: false, message: 'Thank you! Please check your email to confirm your subscription.', emailResult });
 
     } catch (dbError) {
-      // Handle duplicate email gracefully
       if (dbError.code === '23505') {
-        return res.status(200).json({
-          success: true,
-          verified: false,
-          message: 'Subscription pending verification. Please check your email.'
-        });
+        return res.status(200).json({ success: true, verified: false, message: 'Subscription pending verification. Please check your email.' });
       }
-
-      // If it's a missing column error, try simpler insert
-      if (dbError.code === '42703') { // undefined_column
-        console.log('⚠️  Missing column detected, trying simpler insert...');
-
+      if (dbError.code === '42703') {
         const result = await pool.query(
-            `INSERT INTO newsletter_subscribers 
-           (email, source, verification_token, verification_expires, active) 
-           VALUES ($1, $2, $3, $4, false) 
-           RETURNING id`,
+            `INSERT INTO newsletter_subscribers (email, source, verification_token, verification_expires, active) VALUES ($1, $2, $3, $4, false) RETURNING id`,
             [lowerEmail, source, verificationToken, verificationExpires]
         );
-
-        const subscriberId = result.rows[0].id;
         const emailResult = await sendVerificationEmail(lowerEmail, name, verificationToken);
-
-        console.log(`✅ New newsletter subscriber (simple insert): ${lowerEmail}`);
-
-        return res.status(200).json({
-          success: true,
-          verified: false,
-          message: 'Thank you! Please check your email to confirm your subscription.',
-          emailResult: emailResult
-        });
+        return res.status(200).json({ success: true, verified: false, message: 'Thank you! Please check your email to confirm your subscription.', emailResult });
       }
-
-      throw dbError; // Re-throw other errors
+      throw dbError;
     }
 
   } catch (error) {
-    console.error('[NEWSLETTER] Subscription error:', error.message);
-
-    // Generic error response
-    res.status(500).json({
-      success: false,
-      error: 'SUBSCRIPTION_FAILED',
-      message: 'Unable to process subscription. Please try again later.'
-    });
+    console.error('Subscription error:', error.message);
+    res.status(500).json({ success: false, error: 'SUBSCRIPTION_FAILED', message: 'Unable to process subscription. Please try again later.' });
   }
 });
 
-/**
- * PUBLIC ROUTE: Verify email subscription
- */
 router.get('/verify/:token', async (req, res) => {
   try {
     const { token } = req.params;
 
-    // FIX: Set active = true AND verified_at = NOW() when verified
     const result = await pool.query(
-        `UPDATE newsletter_subscribers 
-       SET active = true, 
-           verified_at = NOW(),
-           verification_token = NULL,
-           verification_expires = NULL,
-           unsubscribe_token = COALESCE(unsubscribe_token, encode(gen_random_bytes(50), 'hex'))
-       WHERE verification_token = $1 
-         AND verification_expires > NOW()
-         AND verified_at IS NULL
-         AND active = false  // Only verify if currently inactive
-       RETURNING id, email, name, unsubscribe_token`,
+        `UPDATE newsletter_subscribers SET active = true, verified_at = NOW(), verification_token = NULL, verification_expires = NULL, unsubscribe_token = COALESCE(unsubscribe_token, encode(gen_random_bytes(50), 'hex')) WHERE verification_token = $1 AND verification_expires > NOW() AND verified_at IS NULL AND active = false RETURNING id, email, name, unsubscribe_token`,
         [token]
     );
 
     if (result.rows.length === 0) {
-      return res.status(400).send(`
-        <!DOCTYPE html>
+      return res.status(400).send(`<!DOCTYPE html>
         <html>
         <head>
-          <title>Verification Failed - EmpowerMed</title>
+          <title>Verification Failed - EmpowerMEd</title>
           <meta name="viewport" content="width=device-width, initial-scale=1">
           <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 20px; 
-                   background: #f8f9fa; color: #333; }
-            .container { max-width: 600px; margin: 0 auto; background: white; 
-                        padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f8f9fa; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
             h1 { color: #3D52A0; margin-bottom: 20px; }
             .error { color: #dc3545; font-size: 18px; margin: 20px 0; }
-            .btn { display: inline-block; background: #3D52A0; color: white; 
-                  padding: 12px 24px; text-decoration: none; border-radius: 5px; 
-                  margin-top: 20px; font-weight: bold; }
+            .btn { display: inline-block; background: #3D52A0; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; margin-top: 20px; font-weight: bold; }
+            .logo-img { max-width: 150px; height: auto; margin: 20px auto; display: block; }
           </style>
         </head>
         <body>
           <div class="container">
+            <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img" onerror="this.style.display='none'">
             <h1>Verification Failed</h1>
             <p class="error">The verification link is invalid or has expired.</p>
             <p>Please try subscribing again or contact us if you need assistance.</p>
-            <a href="https://www.empowermedwellness.com" class="btn">Return to Website</a>
+            <a href="${BASE_URL}" class="btn">Return to EmpowerMEd</a>
           </div>
         </body>
-        </html>
-      `);
+        </html>`);
     }
 
     const subscriber = result.rows[0];
 
-    // Send welcome email (don't await - send in background)
     sendWelcomeEmail(subscriber.email, subscriber.name, subscriber.unsubscribe_token)
-    .then(result => {
-      console.log(`✅ Welcome email processed for: ${subscriber.email}`);
-    })
-    .catch(error => {
-      console.error('❌ Welcome email failed:', error.message);
-    });
+    .then(() => {})
+    .catch(() => {});
 
-    // Show confirmation page
-    res.send(`
-      <!DOCTYPE html>
+    res.send(`<!DOCTYPE html>
       <html>
       <head>
-        <title>Subscription Confirmed - EmpowerMed</title>
+        <title>Subscription Confirmed - EmpowerMEd</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 20px; 
-                 background: #f8f9fa; color: #333; }
-          .container { max-width: 600px; margin: 0 auto; background: white; 
-                      padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+          body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f8f9fa; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
           h1 { color: #3D52A0; margin-bottom: 20px; }
           .success { color: #28a745; font-size: 48px; margin: 20px 0; }
-          .btn { display: inline-block; background: #3D52A0; color: white; 
-                padding: 12px 24px; text-decoration: none; border-radius: 5px; 
-                margin-top: 20px; font-weight: bold; }
+          .btn { display: inline-block; background: #3D52A0; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; margin-top: 20px; font-weight: bold; }
           .features { text-align: left; margin: 30px 0; }
           .feature-item { margin: 10px 0; padding-left: 20px; position: relative; }
           .feature-item:before { content: "✓"; color: #28a745; position: absolute; left: 0; }
-          .email-highlight { background: #f0f5ff; padding: 10px; border-radius: 5px; 
-                           margin: 15px 0; font-weight: bold; }
+          .email-highlight { background: #f0f5ff; padding: 10px; border-radius: 5px; margin: 15px 0; font-weight: bold; }
+          .logo-img { max-width: 150px; height: auto; margin: 20px auto; display: block; }
         </style>
       </head>
       <body>
         <div class="container">
+          <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img" onerror="this.style.display='none'">
           <div class="success">✓</div>
           <h1>Subscription Confirmed!</h1>
           <p>Thank you for verifying your email address.</p>
-          <p>Your subscription to EmpowerMed updates is now active.</p>
+          <p>Your subscription to EmpowerMEd updates is now active.</p>
           
           <div class="features">
             <p><strong>What you'll receive:</strong></p>
@@ -468,147 +371,134 @@ router.get('/verify/:token', async (req, res) => {
             <p>A welcome email has been sent to <strong>${subscriber.email}</strong>.</p>
           </div>
           
-          <a href="https://www.empowermedwellness.com" class="btn">Continue to EmpowerMed</a>
+          <a href="${BASE_URL}" class="btn">Continue to EmpowerMEd</a>
         </div>
       </body>
-      </html>
-    `);
+      </html>`);
 
   } catch (error) {
-    console.error('[NEWSLETTER] Verification error:', error.message);
-    res.status(500).send(`
-      <!DOCTYPE html>
+    console.error('Verification error:', error.message);
+    res.status(500).send(`<!DOCTYPE html>
       <html>
       <head>
-        <title>Error - EmpowerMed</title>
+        <title>Error - EmpowerMEd</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-          h1 { color: #dc3545; }
-          .btn { display: inline-block; background: #3D52A0; color: white; 
-                padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 20px; }
+          body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f8f9fa; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+          h1 { color: #dc3545; margin-bottom: 20px; }
+          .btn { display: inline-block; background: #3D52A0; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; margin-top: 20px; font-weight: bold; }
+          .logo-img { max-width: 150px; height: auto; margin: 20px auto; display: block; }
         </style>
       </head>
       <body>
-        <div style="max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px;">
+        <div class="container">
+          <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img" onerror="this.style.display='none'">
           <h1>Verification Error</h1>
           <p>An error occurred while verifying your subscription.</p>
           <p>Please try again or contact us for assistance.</p>
-          <a href="https://www.empowermedwellness.com" class="btn">Return to Website</a>
+          <a href="${BASE_URL}" class="btn">Return to EmpowerMEd</a>
         </div>
       </body>
-      </html>
-    `);
+      </html>`);
   }
 });
 
-/**
- * PUBLIC ROUTE: Unsubscribe
- */
 router.get('/unsubscribe/:token', async (req, res) => {
   try {
     const { token } = req.params;
 
     const result = await pool.query(
-        `UPDATE newsletter_subscribers 
-       SET active = false
-       WHERE unsubscribe_token = $1 
-         AND active = true
-       RETURNING id, email`,
+        `UPDATE newsletter_subscribers SET active = false WHERE unsubscribe_token = $1 AND active = true RETURNING id, email`,
         [token]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).send(`
-        <!DOCTYPE html>
+      return res.status(404).send(`<!DOCTYPE html>
         <html>
         <head>
-          <title>Unsubscribe - EmpowerMed</title>
+          <title>Unsubscribe - EmpowerMEd</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1">
           <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-            h1 { color: #3D52A0; }
-            .btn { display: inline-block; background: #3D52A0; color: white; 
-                  padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 20px; }
+            body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f8f9fa; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            h1 { color: #3D52A0; margin-bottom: 20px; }
+            .btn { display: inline-block; background: #3D52A0; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; margin-top: 20px; font-weight: bold; }
+            .logo-img { max-width: 150px; height: auto; margin: 20px auto; display: block; }
           </style>
         </head>
         <body>
-          <div style="max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px;">
+          <div class="container">
+            <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img" onerror="this.style.display='none'">
             <h1>Invalid Unsubscribe Link</h1>
             <p>The unsubscribe link is invalid or has already been used.</p>
-            <a href="https://www.empowermedwellness.com" class="btn">Return to EmpowerMed</a>
+            <a href="${BASE_URL}" class="btn">Return to EmpowerMEd</a>
           </div>
         </body>
-        </html>
-      `);
+        </html>`);
     }
 
     const subscriber = result.rows[0];
-
-    res.send(`
-      <!DOCTYPE html>
+    res.send(`<!DOCTYPE html>
       <html>
       <head>
-        <title>Unsubscribed - EmpowerMed</title>
+        <title>Unsubscribed - EmpowerMEd</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-          h1 { color: #3D52A0; }
-          .btn { display: inline-block; background: #3D52A0; color: white; 
-                padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 20px; }
+          body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f8f9fa; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+          h1 { color: #3D52A0; margin-bottom: 20px; }
+          .btn { display: inline-block; background: #3D52A0; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; margin-top: 20px; font-weight: bold; }
+          .logo-img { max-width: 150px; height: auto; margin: 20px auto; display: block; }
         </style>
       </head>
       <body>
-        <div style="max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px;">
+        <div class="container">
+          <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img" onerror="this.style.display='none'">
           <h1>You've Been Unsubscribed</h1>
           <p><strong>${subscriber.email}</strong> has been removed from our newsletter list.</p>
           <p>We're sorry to see you go! If this was a mistake, you can resubscribe at any time.</p>
-          <a href="https://www.empowermedwellness.com" class="btn">Return to EmpowerMed</a>
+          <a href="${BASE_URL}" class="btn">Return to EmpowerMEd</a>
         </div>
       </body>
-      </html>
-    `);
+      </html>`);
 
   } catch (error) {
-    console.error('[NEWSLETTER] Unsubscribe error:', error.message);
-    res.status(500).send(`
-      <!DOCTYPE html>
+    console.error('Unsubscribe error:', error.message);
+    res.status(500).send(`<!DOCTYPE html>
       <html>
       <head>
-        <title>Error - EmpowerMed</title>
+        <title>Error - EmpowerMEd</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-          h1 { color: #dc3545; }
-          .btn { display: inline-block; background: #3D52A0; color: white; 
-                padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 20px; }
+          body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f8f9fa; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+          h1 { color: #dc3545; margin-bottom: 20px; }
+          .btn { display: inline-block; background: #3D52A0; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; margin-top: 20px; font-weight: bold; }
+          .logo-img { max-width: 150px; height: auto; margin: 20px auto; display: block; }
         </style>
       </head>
       <body>
-        <div style="max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px;">
+        <div class="container">
+          <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img" onerror="this.style.display='none'">
           <h1>Unsubscribe Error</h1>
           <p>An error occurred while processing your unsubscribe request.</p>
           <p>Please contact us directly at EmpowerMEddev@gmail.com</p>
-          <a href="https://www.empowermedwellness.com" class="btn">Return to Website</a>
+          <a href="${BASE_URL}" class="btn">Return to EmpowerMEd</a>
         </div>
       </body>
-      </html>
-    `);
+      </html>`);
   }
 });
 
-// ==================== ADMIN ROUTES ====================
-
 const adminRouter = express.Router();
-
-// Apply admin middleware
 adminRouter.use(checkJwt);
 adminRouter.use(attachAdminUser);
 adminRouter.use(requireAdmin);
 
-/**
- * ADMIN: Get all subscribers
- */
 adminRouter.get('/subscribers', async (req, res) => {
   try {
     const { page = 1, limit = 20, search = '', status = 'all' } = req.query;
-
     const pageNum = Math.max(1, parseInt(page)) || 1;
     const limitNum = Math.min(100, Math.max(1, parseInt(limit))) || 20;
     const offset = (pageNum - 1) * limitNum;
@@ -622,27 +512,17 @@ adminRouter.get('/subscribers', async (req, res) => {
     }
 
     if (status === 'active') {
-      where.push('active = true AND verified_at IS NOT NULL'); // FIX: Only show truly active
+      where.push('active = true AND verified_at IS NOT NULL');
     } else if (status === 'inactive') {
       where.push('active = false');
     } else if (status === 'pending') {
-      where.push('verified_at IS NULL'); // Show pending verification
+      where.push('verified_at IS NULL');
     }
 
     const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
 
     const subscribersResult = await pool.query(
-        `SELECT id, email, name, subscribed_at, source, active, verified_at,
-              CASE 
-                WHEN verified_at IS NOT NULL AND active = true THEN 'Verified'
-                WHEN verified_at IS NULL AND active = false THEN 'Pending Verification'
-                WHEN active = false THEN 'Unsubscribed'
-                ELSE 'Unknown'
-              END as status
-       FROM newsletter_subscribers 
-       ${whereClause}
-       ORDER BY subscribed_at DESC
-       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        `SELECT id, email, name, subscribed_at, source, active, verified_at, CASE WHEN verified_at IS NOT NULL AND active = true THEN 'Verified' WHEN verified_at IS NULL AND active = false THEN 'Pending Verification' WHEN active = false THEN 'Unsubscribed' ELSE 'Unknown' END as status FROM newsletter_subscribers ${whereClause} ORDER BY subscribed_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
         [...params, limitNum, offset]
     );
 
@@ -665,62 +545,47 @@ adminRouter.get('/subscribers', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[ADMIN] Get subscribers error:', error.message);
-    res.status(500).json({
-      success: false,
-      error: 'FETCH_SUBSCRIBERS_FAILED',
-      message: 'Failed to fetch subscribers'
-    });
+    console.error('Get subscribers error:', error.message);
+    res.status(500).json({ success: false, error: 'FETCH_SUBSCRIBERS_FAILED', message: 'Failed to fetch subscribers' });
   }
 });
 
-/**
- * ADMIN: Get detailed statistics
- */
 adminRouter.get('/stats', async (req, res) => {
   try {
-    // Total counts - UPDATED: Only count as active if verified
     const totalsResult = await pool.query(`
-      SELECT 
-        COUNT(*) as total,
-        SUM(CASE WHEN active = true AND verified_at IS NOT NULL THEN 1 ELSE 0 END) as active,
-        SUM(CASE WHEN active = false THEN 1 ELSE 0 END) as inactive,
-        SUM(CASE WHEN verified_at IS NOT NULL THEN 1 ELSE 0 END) as verified,
-        SUM(CASE WHEN verified_at IS NULL THEN 1 ELSE 0 END) as pending,
-        SUM(CASE WHEN active = true AND verified_at IS NOT NULL AND subscribed_at >= NOW() - INTERVAL '30 days' THEN 1 ELSE 0 END) as this_month
+      SELECT COUNT(*) as total,
+      SUM(CASE WHEN active = true AND verified_at IS NOT NULL THEN 1 ELSE 0 END) as active,
+      SUM(CASE WHEN active = false THEN 1 ELSE 0 END) as inactive,
+      SUM(CASE WHEN verified_at IS NOT NULL THEN 1 ELSE 0 END) as verified,
+      SUM(CASE WHEN verified_at IS NULL THEN 1 ELSE 0 END) as pending,
+      SUM(CASE WHEN active = true AND verified_at IS NOT NULL AND subscribed_at >= NOW() - INTERVAL '30 days' THEN 1 ELSE 0 END) as this_month
       FROM newsletter_subscribers
     `);
 
-    // Growth over time (last 6 months)
     const growthResult = await pool.query(`
-      SELECT 
-        DATE_TRUNC('month', subscribed_at) as month,
-        COUNT(*) as new_subscribers,
-        SUM(CASE WHEN verified_at IS NOT NULL THEN 1 ELSE 0 END) as verified
+      SELECT DATE_TRUNC('month', subscribed_at) as month,
+      COUNT(*) as new_subscribers,
+      SUM(CASE WHEN verified_at IS NOT NULL THEN 1 ELSE 0 END) as verified
       FROM newsletter_subscribers
       WHERE subscribed_at >= NOW() - INTERVAL '6 months'
       GROUP BY DATE_TRUNC('month', subscribed_at)
       ORDER BY month DESC
     `);
 
-    // Source breakdown
     const sourcesResult = await pool.query(`
-      SELECT 
-        COALESCE(source, 'direct') as source,
-        COUNT(*) as count,
-        ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM newsletter_subscribers), 2) as percentage
+      SELECT COALESCE(source, 'direct') as source,
+      COUNT(*) as count,
+      ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM newsletter_subscribers), 2) as percentage
       FROM newsletter_subscribers
       GROUP BY COALESCE(source, 'direct')
       ORDER BY count DESC
       LIMIT 10
     `);
 
-    // Recent subscriptions (last 7 days)
     const recentResult = await pool.query(`
-      SELECT 
-        DATE(subscribed_at) as date,
-        COUNT(*) as count,
-        SUM(CASE WHEN verified_at IS NOT NULL THEN 1 ELSE 0 END) as verified
+      SELECT DATE(subscribed_at) as date,
+      COUNT(*) as count,
+      SUM(CASE WHEN verified_at IS NOT NULL THEN 1 ELSE 0 END) as verified
       FROM newsletter_subscribers
       WHERE subscribed_at >= NOW() - INTERVAL '7 days'
       GROUP BY DATE(subscribed_at)
@@ -738,36 +603,20 @@ adminRouter.get('/stats', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[ADMIN] Get stats error:', error.message);
-    res.status(500).json({
-      success: false,
-      error: 'FETCH_STATS_FAILED',
-      message: 'Failed to fetch statistics'
-    });
+    console.error('Get stats error:', error.message);
+    res.status(500).json({ success: false, error: 'FETCH_STATS_FAILED', message: 'Failed to fetch statistics' });
   }
 });
 
-/**
- * ADMIN: Export subscribers
- */
 adminRouter.get('/export', async (req, res) => {
   try {
     const { format = 'csv' } = req.query;
 
     const result = await pool.query(`
-      SELECT 
-        email,
-        name,
-        subscribed_at,
-        verified_at,
-        source,
-        active,
-        CASE 
-          WHEN verified_at IS NOT NULL AND active = true THEN 'Verified'
-          WHEN verified_at IS NULL AND active = false THEN 'Pending Verification'
-          WHEN active = false THEN 'Unsubscribed'
-          ELSE 'Unknown'
-        END as status
+      SELECT email, name, subscribed_at, verified_at, source, active,
+      CASE WHEN verified_at IS NOT NULL AND active = true THEN 'Verified'
+      WHEN verified_at IS NULL AND active = false THEN 'Pending Verification'
+      WHEN active = false THEN 'Unsubscribed' ELSE 'Unknown' END as status
       FROM newsletter_subscribers
       ORDER BY subscribed_at DESC
     `);
@@ -791,61 +640,31 @@ adminRouter.get('/export', async (req, res) => {
       res.setHeader('Content-Disposition', `attachment; filename=empowermed-subscribers-${date}.csv`);
       res.send(csv);
     } else {
-      res.json({
-        success: true,
-        subscribers: result.rows,
-        exportedAt: new Date().toISOString(),
-        count: result.rows.length
-      });
+      res.json({ success: true, subscribers: result.rows, exportedAt: new Date().toISOString(), count: result.rows.length });
     }
 
   } catch (error) {
-    console.error('[ADMIN] Export error:', error.message);
-    res.status(500).json({
-      success: false,
-      error: 'EXPORT_FAILED',
-      message: 'Failed to export subscribers'
-    });
+    console.error('Export error:', error.message);
+    res.status(500).json({ success: false, error: 'EXPORT_FAILED', message: 'Failed to export subscribers' });
   }
 });
 
-/**
- * ADMIN: Delete subscriber - FIXED to match frontend
- */
 adminRouter.delete('/subscribers/:id', async (req, res) => {
   try {
     const { id } = req.params;
-
-    const result = await pool.query(
-        'DELETE FROM newsletter_subscribers WHERE id = $1 RETURNING email',
-        [id]
-    );
+    const result = await pool.query('DELETE FROM newsletter_subscribers WHERE id = $1 RETURNING email', [id]);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'SUBSCRIBER_NOT_FOUND',
-        message: 'Subscriber not found'
-      });
+      return res.status(404).json({ success: false, error: 'SUBSCRIBER_NOT_FOUND', message: 'Subscriber not found' });
     }
 
-    res.json({
-      success: true,
-      message: 'Subscriber deleted successfully',
-      deletedEmail: result.rows[0].email
-    });
-
+    res.json({ success: true, message: 'Subscriber deleted successfully', deletedEmail: result.rows[0].email });
   } catch (error) {
-    console.error('[ADMIN] Delete subscriber error:', error.message);
-    res.status(500).json({
-      success: false,
-      error: 'DELETE_FAILED',
-      message: 'Failed to delete subscriber'
-    });
+    console.error('Delete subscriber error:', error.message);
+    res.status(500).json({ success: false, error: 'DELETE_FAILED', message: 'Failed to delete subscriber' });
   }
 });
 
-// Mount admin routes - IMPORTANT: Mount adminRouter at root level
 router.use('/admin', adminRouter);
 
 module.exports = router;

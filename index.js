@@ -21,6 +21,7 @@ const PORT = process.env.PORT || 5000;
 const isProd = process.env.NODE_ENV === 'production';
 const newsletterRoutes = require('./routes/newsletter');
 
+
 // Domain configuration - IMPORTANT: Use proper domain for cookies
 const COOKIE_DOMAIN = isProd ? '.empowermedwellness.com' : undefined;
 
