@@ -1,4 +1,4 @@
-// routes/newsletter.js - PRODUCTION READY
+// routes/newsletter.js - PRODUCTION READY WITH ENVIRONMENT VARIABLES
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
@@ -11,14 +11,44 @@ if (process.env.SENDGRID_API_KEY) {
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 }
 
+// Use environment variables from Render
+const BACKEND_BASE = process.env.BACKEND_URL ||
+    (process.env.NODE_ENV === 'production'
+        ? 'https://api.empowermedwellness.com'
+        : 'http://localhost:5000');
+
+const FRONTEND_BASE = process.env.FRONTEND_URL ||
+    (process.env.NODE_ENV === 'production'
+        ? 'https://www.empowermedwellness.com'
+        : 'http://localhost:5173');
+
+// Logo URL - try different possible locations
+const getLogoUrl = () => {
+  const base = process.env.FRONTEND_URL ||
+      (process.env.NODE_ENV === 'production'
+          ? 'https://www.empowermedwellness.com'
+          : 'http://localhost:5173');
+
+  // Try different possible locations
+  const possiblePaths = [
+    '/logo.png',                    // Root directory
+    '/images/logo.png',             // Images directory
+    '/assets/logo.png',             // Assets directory
+    '/static/logo.png',             // Static directory
+    '/public/logo.png'              // Public directory
+  ];
+
+  // Return the base URL - you'll need to test which path works
+  return `${base}/logo.png`;
+};
+
+const LOGO_URL = getLogoUrl();
+
 const EMAIL_CONFIG = {
   fromEmail: process.env.EMAIL_FROM || 'EmpowerMEddev@gmail.com',
   fromName: process.env.EMAIL_FROM_NAME || 'EmpowerMEd',
   replyTo: process.env.EMAIL_REPLY_TO || 'EmpowerMEddev@gmail.com'
 };
-
-const BASE_URL = 'https://www.empowermedwellness.com';
-const LOGO_URL = `${BASE_URL}/images/logo.png`;
 
 const generateToken = () => crypto.randomBytes(32).toString('hex');
 
@@ -27,7 +57,15 @@ router.get('/health', (req, res) => {
     status: 'healthy',
     service: 'newsletter',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'production'
+    environment: process.env.NODE_ENV || 'production',
+    backendUrl: BACKEND_BASE,
+    frontendUrl: FRONTEND_BASE,
+    logoUrl: LOGO_URL,
+    envVars: {
+      hasBackendUrl: !!process.env.BACKEND_URL,
+      hasFrontendUrl: !!process.env.FRONTEND_URL,
+      nodeEnv: process.env.NODE_ENV
+    }
   });
 });
 
@@ -36,6 +74,9 @@ if (process.env.NODE_ENV !== 'production') {
     res.json({
       message: 'Newsletter API is working!',
       environment: 'development',
+      backendUrl: BACKEND_BASE,
+      frontendUrl: FRONTEND_BASE,
+      logoUrl: LOGO_URL,
       routes: [
         'POST /api/newsletter/subscribe',
         'GET /api/newsletter/verify/:token',
@@ -57,19 +98,28 @@ if (process.env.NODE_ENV !== 'production') {
           h1 { color: #3D52A0; margin-bottom: 20px; }
           .success { color: #28a745; font-size: 48px; margin: 20px 0; }
           .btn { display: inline-block; background: #3D52A0; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; margin-top: 20px; font-weight: bold; }
-          .logo-img { max-width: 150px; height: auto; margin: 20px auto; display: block; }
+          .logo-img { max-width: 150px; height: auto; margin: 20px auto; display: block; border: 1px solid #ddd; padding: 5px; }
+          .debug-info { text-align: left; background: #f0f5ff; padding: 15px; border-radius: 5px; margin: 20px 0; font-family: monospace; font-size: 12px; }
         </style>
       </head>
       <body>
         <div class="container">
-          <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img" onerror="this.style.display='none'">
           <div class="success">✅</div>
           <h1>Verification Route is Working!</h1>
           <p>This is a development-only test route.</p>
-          <p><strong>Logo URL:</strong> ${LOGO_URL}</p>
-          <p><strong>Environment:</strong> development</p>
-          <a href="http://localhost:5173" class="btn">Return to Website</a>
+          <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img" onerror="this.onerror=null; this.style.display='none'; console.log('Logo failed to load:', this.src);">
+          <div class="debug-info">
+            <p><strong>Logo URL:</strong> ${LOGO_URL}</p>
+            <p><strong>Environment:</strong> development</p>
+            <p><strong>Backend URL:</strong> ${BACKEND_BASE}</p>
+            <p><strong>Frontend URL:</strong> ${FRONTEND_BASE}</p>
+          </div>
+          <a href="${FRONTEND_BASE}" class="btn">Return to Website</a>
         </div>
+        <script>
+          console.log('Logo URL:', '${LOGO_URL}');
+          console.log('Environment:', 'development');
+        </script>
       </body>
       </html>`);
   });
@@ -77,7 +127,7 @@ if (process.env.NODE_ENV !== 'production') {
 
 const sendVerificationEmail = async (email, name, token) => {
   try {
-    const verificationLink = `${BASE_URL}/api/newsletter/verify/${token}`;
+    const verificationLink = `${BACKEND_BASE}/api/newsletter/verify/${token}`;
 
     const msg = {
       to: email,
@@ -107,7 +157,7 @@ const sendVerificationEmail = async (email, name, token) => {
         <body>
           <div class="header">
             <div class="brand">EmpowerMEd</div>
-            <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img">
+            <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img" onerror="this.style.display='none'">
           </div>
           <div class="content">
             <h2>Welcome to EmpowerMEd!</h2>
@@ -144,7 +194,7 @@ const sendVerificationEmail = async (email, name, token) => {
 
 const sendWelcomeEmail = async (email, name, unsubscribeToken) => {
   try {
-    const unsubscribeLink = `${BASE_URL}/api/newsletter/unsubscribe/${unsubscribeToken}`;
+    const unsubscribeLink = `${BACKEND_BASE}/api/newsletter/unsubscribe/${unsubscribeToken}`;
 
     const msg = {
       to: email,
@@ -177,7 +227,7 @@ const sendWelcomeEmail = async (email, name, unsubscribeToken) => {
         <body>
           <div class="header">
             <div class="brand">EmpowerMEd</div>
-            <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img">
+            <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img" onerror="this.style.display='none'">
           </div>
           <div class="content">
             <h2>🎉 Welcome to Our Wellness Community!</h2>
@@ -321,7 +371,7 @@ router.get('/verify/:token', async (req, res) => {
             <h1>Verification Failed</h1>
             <p class="error">The verification link is invalid or has expired.</p>
             <p>Please try subscribing again or contact us if you need assistance.</p>
-            <a href="${BASE_URL}" class="btn">Return to EmpowerMEd</a>
+            <a href="${FRONTEND_BASE}" class="btn">Return to EmpowerMEd</a>
           </div>
         </body>
         </html>`);
@@ -371,7 +421,7 @@ router.get('/verify/:token', async (req, res) => {
             <p>A welcome email has been sent to <strong>${subscriber.email}</strong>.</p>
           </div>
           
-          <a href="${BASE_URL}" class="btn">Continue to EmpowerMEd</a>
+          <a href="${FRONTEND_BASE}" class="btn">Continue to EmpowerMEd</a>
         </div>
       </body>
       </html>`);
@@ -397,7 +447,7 @@ router.get('/verify/:token', async (req, res) => {
           <h1>Verification Error</h1>
           <p>An error occurred while verifying your subscription.</p>
           <p>Please try again or contact us for assistance.</p>
-          <a href="${BASE_URL}" class="btn">Return to EmpowerMEd</a>
+          <a href="${FRONTEND_BASE}" class="btn">Return to EmpowerMEd</a>
         </div>
       </body>
       </html>`);
@@ -432,7 +482,7 @@ router.get('/unsubscribe/:token', async (req, res) => {
             <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img" onerror="this.style.display='none'">
             <h1>Invalid Unsubscribe Link</h1>
             <p>The unsubscribe link is invalid or has already been used.</p>
-            <a href="${BASE_URL}" class="btn">Return to EmpowerMEd</a>
+            <a href="${FRONTEND_BASE}" class="btn">Return to EmpowerMEd</a>
           </div>
         </body>
         </html>`);
@@ -458,7 +508,7 @@ router.get('/unsubscribe/:token', async (req, res) => {
           <h1>You've Been Unsubscribed</h1>
           <p><strong>${subscriber.email}</strong> has been removed from our newsletter list.</p>
           <p>We're sorry to see you go! If this was a mistake, you can resubscribe at any time.</p>
-          <a href="${BASE_URL}" class="btn">Return to EmpowerMEd</a>
+          <a href="${FRONTEND_BASE}" class="btn">Return to EmpowerMEd</a>
         </div>
       </body>
       </html>`);
@@ -484,7 +534,7 @@ router.get('/unsubscribe/:token', async (req, res) => {
           <h1>Unsubscribe Error</h1>
           <p>An error occurred while processing your unsubscribe request.</p>
           <p>Please contact us directly at EmpowerMEddev@gmail.com</p>
-          <a href="${BASE_URL}" class="btn">Return to EmpowerMEd</a>
+          <a href="${FRONTEND_BASE}" class="btn">Return to EmpowerMEd</a>
         </div>
       </body>
       </html>`);
