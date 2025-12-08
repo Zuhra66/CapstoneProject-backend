@@ -254,7 +254,6 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 🔍 Audit Logging: Enabled
 🍪 Cookie Domain: ${COOKIE_DOMAIN || 'localhost'}
 🔒 Secure Cookies: ${isProd}
-🎯 Allowed Origins: ${allowedOrigins.join(', ')}
   `);
 });
 
