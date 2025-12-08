@@ -498,13 +498,43 @@ router.get('/users', async (req, res) => {
     if (status === 'inactive') where.push('is_active = false');
 
     const usersSql = `
-      SELECT id, auth0_id, email, first_name, last_name, name, role, is_active,
-             is_admin, auth_provider, created_at, updated_at
+      SELECT
+        users.id,
+        users.auth0_id,
+        users.email,
+        users.first_name,
+        users.last_name,
+        users.name,
+        users.role,
+        users.is_active,
+        users.is_admin,
+        users.auth_provider,
+        users.created_at,
+        users.updated_at,
+
+        -- Add correct membership object
+        json_build_object(
+          'status', um.status,
+          'start_date', um.start_at,
+          'end_date', um.end_at,
+          'plan_name', mp.name
+        ) AS membership
+
       FROM public.users
+
+      LEFT JOIN user_memberships um
+        ON um.user_id = users.id 
+        AND um.status = 'active'
+
+      LEFT JOIN membership_plans mp
+        ON mp.id = um.plan_id
+
       WHERE ${where.join(' AND ')}
-      ORDER BY created_at DESC
-      LIMIT $${i + 1} OFFSET $${i + 2}
+
+      ORDER BY users.created_at DESC
+      LIMIT $${i+1} OFFSET $${i+2}
     `;
+    
     const countSql = `SELECT COUNT(*) FROM public.users WHERE ${where.join(' AND ')}`;
 
     const [usersResult, countResult] = await Promise.all([

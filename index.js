@@ -16,6 +16,8 @@ const catalogRouter   = require('./routes/catalog');
 const educationRouter = require('./routes/education');
 const blogRoutes      = require('./routes/blog');
 const eventsRoutes    = require('./routes/events');
+const calendarRoutes = require('./routes/calendar');
+const membershipRoutes = require('./routes/memberships');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -105,8 +107,10 @@ app.get('/debug/cookies', (req, res) => {
 
 app.use('/internal', syncRoutes);
 app.use('/auth', authRoutes);
+app.use('/calendar', calendarRoutes);
 app.use('/api/blog', blogRoutes);
 app.use('/api/events', eventsRoutes);
+app.use('/memberships', membershipRoutes);
 
 /* ---------- CSRF Protection ---------- */
 // Create CSRF middleware instance
@@ -229,5 +233,15 @@ function shutdown() {
   console.log('Shutting down...');
   server.close(() => pool.end(() => process.exit(0)));
 }
+
+/* ---------- Log DB Local Connection ---------- */
+(async () => {
+  try {
+    const { rows } = await pool.query('SELECT NOW() AS now');
+    console.log('✅ Database connected @', rows[0].now);
+  } catch (err) {
+    console.error('❌ Database connection error:', err.message);
+  }
+})();
 
 module.exports = app;

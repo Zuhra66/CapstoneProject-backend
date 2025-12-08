@@ -7,6 +7,11 @@ const { pool } = require('../db');
 // Import the SAME JWT middleware from admin-check
 const { checkJwt } = require('../middleware/admin-check');
 
+// Membership
+const membershipRoutes = require("./memberships");
+const getActiveMembershipForUser = membershipRoutes.getActiveMembershipForUser;
+
+
 /**
  * Get complete user profile from Auth0 userinfo endpoint
  * This ensures we get the full profile including email, name, etc.
@@ -166,6 +171,29 @@ router.get('/me', checkJwt, async (req, res) => {
     });
 
     const user = await upsertUserFromAuth0(completeProfile);
+    
+    console.log("🔐 Logged-in user:", user);
+    const membership = await getActiveMembershipForUser(user.id);
+
+    /* -------------------------------------------
+      🔗 AUTO-LINK EXISTING APPOINTMENTS BY EMAIL - MAY NEED TO REMOVE WILL TEST FURTHER
+    ------------------------------------------- */
+    try {
+      // Normalize both sides
+      const normalizedEmail = user.email.trim().toLowerCase();
+      console.log("🔗 Normalized email for linking:", normalizedEmail);
+
+      const linkRes = await pool.query(
+        `UPDATE appointments
+        SET user_id = $1, updated_at = NOW()
+        WHERE LOWER(TRIM(email)) = $2 AND user_id IS NULL`,
+        [user.id, normalizedEmail]
+      );
+
+      console.log(`🔗 Linked ${linkRes.rowCount} appointments to user ${user.email}`);
+    } catch (err) {
+      console.error("❌ Linking error:", err);
+    }
 
     console.log('✅ Authentication successful for user:', user.email);
 
@@ -181,7 +209,8 @@ router.get('/me', checkJwt, async (req, res) => {
         is_active: user.is_active,
         created_at: user.created_at,
         updated_at: user.updated_at,
-        auth_provider: user.auth_provider
+        auth_provider: user.auth_provider,
+        membership 
       }
     });
   } catch (err) {
