@@ -1,5 +1,4 @@
-// server.js (main backend entry)
-
+// Import routes
 const express = require('express');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
@@ -7,10 +6,8 @@ const csrf = require('csurf');
 const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
-
 const { pool, healthCheck } = require('./db');
 const { checkJwt, attachAdminUser } = require('./middleware/admin-check');
-
 const profileRoutes   = require('./routes/profile');
 const authRoutes      = require('./routes/auth');
 const syncRoutes      = require('./routes/sync');
@@ -19,6 +16,11 @@ const catalogRouter   = require('./routes/catalog');
 const educationRouter = require('./routes/education');
 const blogRoutes      = require('./routes/blog');
 const eventsRoutes    = require('./routes/events');
+const newsletterRoutes = require('./routes/newsletter');
+const auditLogsRoutes = require('./routes/auditLogs');  // NEW: Audit logs routes
+
+// Import audit middleware
+const auditMiddleware = require('./middleware/auditMiddleware');  // NEW: Audit middleware
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -35,10 +37,10 @@ console.log('   Cookie Domain:', COOKIE_DOMAIN || 'localhost');
 app.set('trust proxy', 1);
 
 app.use(
-  helmet({
-    contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false,
-  })
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginEmbedderPolicy: false,
+    })
 );
 
 // 🔸 allow larger JSON bodies so base64 / big payloads work
@@ -69,7 +71,8 @@ const allowedOrigins = [
   'https://empowermed-frontend.onrender.com',
 ];
 
-app.use((req, res, next) => {
+// CORS middleware function
+const corsMiddleware = (req, res, next) => {
   const origin = req.headers.origin;
 
   if (origin && allowedOrigins.includes(origin)) {
@@ -78,23 +81,27 @@ app.use((req, res, next) => {
 
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader(
-    'Access-Control-Allow-Headers',
-    'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-XSRF-TOKEN, X-CSRF-Token, X-Internal-API-Key'
+      'Access-Control-Allow-Headers',
+      'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-XSRF-TOKEN, X-CSRF-Token, X-Internal-API-Key'
   );
   res.setHeader(
-    'Access-Control-Allow-Methods',
-    'GET, POST, PATCH, PUT, DELETE, OPTIONS'
+      'Access-Control-Allow-Methods',
+      'GET, POST, PATCH, PUT, DELETE, OPTIONS'
   );
 
+  // Handle OPTIONS requests (preflight)
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
   next();
-});
+};
+
+// Apply CORS to all routes
+app.use(corsMiddleware);
 
 /* ---------- Public routes ---------- */
-app.get('/', (_req, res) => res.send('EmpowerMed backend running'));
+app.get('/', (_req, res) => res.send('{ "status": "ok" }\n'));
 app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
 app.get('/health/db', async (_req, res) => {
   try {
@@ -138,9 +145,9 @@ const meHandler = (req, res) => {
   }
 
   const roles =
-    user.roles ||
-    user['https://empowermedwellness.com/roles'] ||
-    [];
+      user.roles ||
+      user['https://empowermedwellness.com/roles'] ||
+      [];
 
   res.json({
     user: {
@@ -170,28 +177,58 @@ const csrfProtection = csrf({
   },
 });
 
-// Apply CSRF protection to routes that need it
-app.use((req, res, next) => {
-  // Skip CSRF for these paths
+/* ---------- Apply audit middleware ---------- */
+// Apply audit middleware to all routes after authentication
+// Note: This should come AFTER CSRF but BEFORE routes
+app.use(auditMiddleware);
+
+// ULTIMATE CSRF SKIP LIST - PRODUCTION READY
+const csrfSkipMiddleware = (req, res, next) => {
+  const fullPath = req.originalUrl || req.url;
+
+  // IMPORTANT: Skip CSRF for these paths
   if (
-    req.path.startsWith('/internal') ||
-    req.path.startsWith('/auth') ||
-    req.path.startsWith('/api/auth') ||
-    req.path.startsWith('/api/blog') ||
-    req.path.startsWith('/api/events') ||
-    req.path.startsWith('/uploads') || // static files, no CSRF
-    req.path === '/csrf-token' ||
-    req.path === '/health' ||
-    req.path === '/debug/cookies'
+      // API endpoints that don't need CSRF (public or internal)
+      fullPath.startsWith('/internal') ||          // Internal sync routes
+      fullPath.startsWith('/auth') ||              // All auth routes
+      fullPath.startsWith('/api/auth') ||          // Also auth API routes
+      fullPath.startsWith('/api/blog') ||          // Public blog API
+      fullPath.startsWith('/api/events') ||        // Public events API
+      fullPath.startsWith('/api/newsletter') ||    // Newsletter subscribe/unsubscribe
+      fullPath.startsWith('/api/audit') ||         // Audit logs (already admin-protected)
+
+      // Health and status endpoints
+      fullPath === '/' ||                          // Root status
+      fullPath === '/health' ||                    // Basic health check
+      fullPath === '/health/db' ||                 // Database health check
+      fullPath === '/debug/cookies' ||             // Debug endpoint
+
+      // CSRF token endpoint itself
+      fullPath === '/csrf-token' ||
+
+      // Static files (if you serve any)
+      fullPath.startsWith('/uploads') ||           // Uploaded files
+      fullPath.startsWith('/static') ||            // Static assets
+
+      // Webhook endpoints (if you have any)
+      fullPath.startsWith('/webhooks/') ||         // External webhooks
+
+      // OPTIONS requests (preflight)
+      req.method === 'OPTIONS'
   ) {
+    console.log(`🔓 Skipping CSRF for: ${fullPath}`);
     return next();
   }
 
+  console.log(`🔐 Applying CSRF for: ${fullPath}`);
   return csrfProtection(req, res, next);
-});
+};
+
+// Apply the CSRF skip middleware BEFORE mounting routes
+app.use(csrfSkipMiddleware);
 
 // CSRF token endpoint
-app.get('/csrf-token', csrfProtection, (req, res) => {
+app.get('/csrf-token', (req, res) => {
   const token = req.csrfToken();
 
   console.log('🔐 Generated CSRF token for origin:', req.headers.origin);
@@ -220,10 +257,15 @@ app.post('/csrf-test', csrfProtection, (req, res) => {
 });
 
 /* ---------- API routes ---------- */
+// Mount all API routes AFTER CSRF and audit middleware
+app.use('/api/newsletter', newsletterRoutes);
 app.use('/api/profile', profileRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api', catalogRouter);
 app.use('/api/education', educationRouter);
+
+// NEW: Add audit logs routes (protected by admin middleware)
+app.use('/api/audit', auditLogsRoutes);
 
 /* ---------- Error Handling ---------- */
 app.use((err, req, res, next) => {
@@ -232,39 +274,45 @@ app.use((err, req, res, next) => {
     code: err.code,
     message: err.message,
     path: req.path,
-    timestamp: new Date().toISOString(),
+    originalUrl: req.originalUrl,
+    method: req.method,
+    timestamp: new Date().toISOString()
   });
 
-  if (err.name === 'UnauthorizedError') {
-    return res.status(401).json({ error: 'Invalid or missing token' });
-  }
-
+  // CSRF errors
   if (err.code === 'EBADCSRFTOKEN') {
-    console.log('🔍 CSRF Error Details:', {
-      headers: {
-        'x-xsrf-token': req.headers['x-xsrf-token'] ? 'present' : 'missing',
-        cookie: req.headers.cookie ? 'present' : 'missing',
-      },
-      cookies: req.cookies,
-    });
-
     return res.status(403).json({
       error: 'Invalid CSRF token',
       details: 'Please refresh the page',
+      path: req.originalUrl
     });
   }
 
-  // 413: entity too large
+  // Payload too large (from dev-ZT)
   if (err.type === 'entity.too.large' || err.status === 413) {
     return res.status(413).json({
       error: 'Payload too large',
       details: 'Request body is too big. Try a smaller image.',
+      path: req.originalUrl
     });
   }
 
+  // Auth errors
+  if (err.name === 'UnauthorizedError') {
+    return res.status(401).json({
+      error: 'Invalid or missing token',
+      path: req.originalUrl
+    });
+  }
+
+  // All other errors
   res.status(err.status || 500).json({
     error: 'Server error',
-    details: isProd ? 'Internal server error' : err.message,
+    details: process.env.NODE_ENV === 'production'
+        ? 'Internal server error'
+        : err.message,
+    path: req.originalUrl,
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -275,6 +323,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 📡 Port: ${PORT}
 🌐 Environment: ${process.env.NODE_ENV}
 🔐 CSRF Protection: Enabled
+🔍 Audit Logging: Enabled
 🍪 Cookie Domain: ${COOKIE_DOMAIN || 'localhost'}
 🔒 Secure Cookies: ${isProd}
 🎯 Allowed Origins: ${allowedOrigins.join(', ')}
