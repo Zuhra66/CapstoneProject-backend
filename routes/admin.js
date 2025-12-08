@@ -418,245 +418,16 @@ router.get('/debug-user/:userId', async (req, res) => {
   }
 });
 
-// Add this section to your existing admin.js file - RIGHT AFTER the dashboard-stats route
-
-// ============================================
-// UPDATED DASHBOARD-STATS ROUTE WITH AUDIT STATS
-// ============================================
 router.get('/dashboard-stats', async (req, res) => {
   try {
-    // Get users stats
     const totalUsers = await dbPool.query('SELECT COUNT(*) FROM public.users');
-    const activeUsers = await dbPool.query('SELECT COUNT(*) FROM public.users WHERE is_active = true');
-    const newUsersThisMonth = await dbPool.query(`
-      SELECT COUNT(*) 
-      FROM public.users 
-      WHERE created_at >= date_trunc('month', CURRENT_DATE)
-    `);
-
-    // ✅ ADD NEWSLETTER STATS
-    let newsletterTotal = 0;
-    let newsletterActive = 0;
-
-    try {
-      const newsletterResult = await dbPool.query(`
-        SELECT 
-          COUNT(*) as total,
-          SUM(CASE WHEN active THEN 1 ELSE 0 END) as active
-        FROM newsletter_subscribers
-      `);
-
-      if (newsletterResult.rows.length > 0) {
-        newsletterTotal = parseInt(newsletterResult.rows[0].total) || 0;
-        newsletterActive = parseInt(newsletterResult.rows[0].active) || 0;
-      }
-    } catch (newsletterError) {
-      console.log('Newsletter stats not available:', newsletterError.message);
-      // Newsletter table might not exist yet, that's okay
-    }
-
-    // ✅ ADD AUDIT LOG STATS
-    let auditStats = {
-      total: 0,
-      today: 0,
-      security: 0,
-      authentication: 0,
-      access: 0,
-      modification: 0
-    };
-
-    try {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      // Run all audit stat queries
-      const auditQueries = await Promise.all([
-        // Total audit logs
-        dbPool.query('SELECT COUNT(*) FROM audit_logs'),
-
-        // Today's audit logs
-        dbPool.query('SELECT COUNT(*) FROM audit_logs WHERE created_at >= $1', [today]),
-
-        // Security events
-        dbPool.query(`SELECT COUNT(*) FROM audit_logs WHERE event_category = 'security'`),
-
-        // Authentication events
-        dbPool.query(`SELECT COUNT(*) FROM audit_logs WHERE event_category = 'authentication'`),
-
-        // Access events
-        dbPool.query(`SELECT COUNT(*) FROM audit_logs WHERE event_category = 'access'`),
-
-        // Modification events
-        dbPool.query(`SELECT COUNT(*) FROM audit_logs WHERE event_category = 'modification'`)
-      ]);
-
-      auditStats = {
-        total: parseInt(auditQueries[0].rows[0].count) || 0,
-        today: parseInt(auditQueries[1].rows[0].count) || 0,
-        security: parseInt(auditQueries[2].rows[0].count) || 0,
-        authentication: parseInt(auditQueries[3].rows[0].count) || 0,
-        access: parseInt(auditQueries[4].rows[0].count) || 0,
-        modification: parseInt(auditQueries[5].rows[0].count) || 0
-      };
-
-    } catch (auditError) {
-      console.log('Audit stats not available:', auditError.message);
-      // Audit table might not have all columns yet, that's okay
-    }
 
     const stats = {
       users: {
         total: parseInt(totalUsers.rows[0].count),
-        active: parseInt(activeUsers.rows[0].count),
-        newThisMonth: parseInt(newUsersThisMonth.rows[0].count)
-      },
-      // ✅ Newsletter stats added here
-      newsletter: {
-        total: newsletterTotal,
-        active: newsletterActive
-      },
-      appointments: {
-        total: 0,
-        pending: 0,
-        today: 0
-      },
-      products: { total: 0 },
-      categories: { total: 0 },
-      blog: { total: 0 },
-      education: {
-        videos: 0,
-        articles: 0
-      },
-      events: { upcoming: 0 },
-      memberships: {
-        plans: 0,
-        active: 0
-      },
-      messages: { total: 0 },
-      // ✅ Audit stats added here
-      audit: auditStats
-    };
-
-    // Try to get additional stats if tables exist (KEEP ALL YOUR EXISTING CODE HERE)
-    try {
-      // Appointments stats
-      const appointmentsTotal = await dbPool.query('SELECT COUNT(*) FROM appointments');
-      const appointmentsPending = await dbPool.query("SELECT COUNT(*) FROM appointments WHERE status = 'pending'");
-      const appointmentsToday = await dbPool.query(`
-        SELECT COUNT(*) FROM appointments 
-        WHERE DATE(appointment_date) = CURRENT_DATE
-      `);
-      stats.appointments = {
-        total: parseInt(appointmentsTotal.rows[0].count) || 0,
-        pending: parseInt(appointmentsPending.rows[0].count) || 0,
-        today: parseInt(appointmentsToday.rows[0].count) || 0
-      };
-    } catch (e) {
-      console.log('Appointments stats not available:', e.message);
-    }
-
-    try {
-      // Products stats
-      const productsTotal = await dbPool.query('SELECT COUNT(*) FROM products');
-      stats.products.total = parseInt(productsTotal.rows[0].count) || 0;
-    } catch (e) {
-      console.log('Products stats not available:', e.message);
-    }
-
-    try {
-      // Blog stats
-      const blogTotal = await dbPool.query('SELECT COUNT(*) FROM blog_posts');
-      stats.blog.total = parseInt(blogTotal.rows[0].count) || 0;
-    } catch (e) {
-      console.log('Blog stats not available:', e.message);
-    }
-
-    try {
-      // Education stats
-      const educationVideos = await dbPool.query('SELECT COUNT(*) FROM education_videos');
-      const educationArticles = await dbPool.query('SELECT COUNT(*) FROM education_articles');
-      stats.education = {
-        videos: parseInt(educationVideos.rows[0].count) || 0,
-        articles: parseInt(educationArticles.rows[0].count) || 0
-      };
-    } catch (e) {
-      console.log('Education stats not available:', e.message);
-    }
-
-    try {
-      // Categories stats
-      const categoriesTotal = await dbPool.query('SELECT COUNT(*) FROM categories');
-      stats.categories.total = parseInt(categoriesTotal.rows[0].count) || 0;
-    } catch (e) {
-      console.log('Categories stats not available:', e.message);
-    }
-
-    try {
-      // Events stats (upcoming)
-      const upcomingEvents = await dbPool.query(`
-        SELECT COUNT(*) FROM events 
-        WHERE event_date >= CURRENT_DATE
-      `);
-      stats.events.upcoming = parseInt(upcomingEvents.rows[0].count) || 0;
-    } catch (e) {
-      console.log('Events stats not available:', e.message);
-    }
-
-    try {
-      // Memberships stats
-      const membershipPlans = await dbPool.query('SELECT COUNT(*) FROM membership_plans');
-      const activeMemberships = await dbPool.query("SELECT COUNT(*) FROM user_memberships WHERE status = 'active'");
-      stats.memberships = {
-        plans: parseInt(membershipPlans.rows[0].count) || 0,
-        active: parseInt(activeMemberships.rows[0].count) || 0
-      };
-    } catch (e) {
-      console.log('Memberships stats not available:', e.message);
-    }
-
-    try {
-      // Messages stats
-      const messagesTotal = await dbPool.query('SELECT COUNT(*) FROM contact_messages');
-      stats.messages.total = parseInt(messagesTotal.rows[0].count) || 0;
-    } catch (e) {
-      console.log('Messages stats not available:', e.message);
-    }
-
-    // Get user roles distribution
-    try {
-      const rolesResult = await dbPool.query(`
-        SELECT role, COUNT(*) as count 
-        FROM users 
-        WHERE role IS NOT NULL 
-        GROUP BY role
-      `);
-
-      stats.users.roles = {};
-      rolesResult.rows.forEach(row => {
-        stats.users.roles[row.role] = parseInt(row.count);
-      });
-    } catch (e) {
-      console.log('User roles stats not available:', e.message);
-    }
-
-    await logAdminAction(req.adminUser.id, 'VIEW_DASHBOARD_STATS', null, {}, req);
-
-    console.log('📊 Dashboard stats generated successfully');
-    res.json(stats);
-
-  } catch (error) {
-    console.error('❌ Dashboard stats error:', error);
-
-    const fallbackStats = {
-      users: {
-        total: 1,
-        active: 1,
+        active: 0,
         newThisMonth: 0
       },
-      newsletter: {
-        total: 0,
-        active: 0
-      },
       appointments: {
         total: 0,
         pending: 0,
@@ -675,14 +446,23 @@ router.get('/dashboard-stats', async (req, res) => {
         active: 0
       },
       messages: { total: 0 },
-      audit: {
-        total: 0,
-        today: 0,
-        security: 0,
-        authentication: 0,
-        access: 0,
-        modification: 0
-      }
+      audit: { total: 0 }
+    };
+
+    await logAdminAction(req.adminUser.id, 'VIEW_DASHBOARD_STATS', null, {}, req);
+    res.json(stats);
+  } catch (error) {
+    const fallbackStats = {
+      users: { total: 1, active: 1, newThisMonth: 0 },
+      appointments: { total: 0, pending: 0, today: 0 },
+      products: { total: 0 },
+      categories: { total: 0 },
+      blog: { total: 0 },
+      education: { videos: 0, articles: 0 },
+      events: { upcoming: 0 },
+      memberships: { plans: 0, active: 0 },
+      messages: { total: 0 },
+      audit: { total: 0 }
     };
 
     res.json(fallbackStats);
@@ -718,13 +498,43 @@ router.get('/users', async (req, res) => {
     if (status === 'inactive') where.push('is_active = false');
 
     const usersSql = `
-      SELECT id, auth0_id, email, first_name, last_name, name, role, is_active,
-             is_admin, auth_provider, created_at, updated_at
+      SELECT
+        users.id,
+        users.auth0_id,
+        users.email,
+        users.first_name,
+        users.last_name,
+        users.name,
+        users.role,
+        users.is_active,
+        users.is_admin,
+        users.auth_provider,
+        users.created_at,
+        users.updated_at,
+
+        -- Add correct membership object
+        json_build_object(
+          'status', um.status,
+          'start_date', um.start_at,
+          'end_date', um.end_at,
+          'plan_name', mp.name
+        ) AS membership
+
       FROM public.users
+
+      LEFT JOIN user_memberships um
+        ON um.user_id = users.id 
+        AND um.status = 'active'
+
+      LEFT JOIN membership_plans mp
+        ON mp.id = um.plan_id
+
       WHERE ${where.join(' AND ')}
-      ORDER BY created_at DESC
-      LIMIT $${i + 1} OFFSET $${i + 2}
+
+      ORDER BY users.created_at DESC
+      LIMIT $${i+1} OFFSET $${i+2}
     `;
+    
     const countSql = `SELECT COUNT(*) FROM public.users WHERE ${where.join(' AND ')}`;
 
     const [usersResult, countResult] = await Promise.all([
@@ -1370,6 +1180,53 @@ router.delete('/products/:id', async (req, res) => {
   } catch (e) {
     console.error('admin delete product error:', e);
     res.status(500).json({ error: 'Failed to delete product' });
+  }
+});
+
+router.get('/audit-logs', async (req, res) => {
+  try {
+    const adminUserId = req.adminUser.id;
+    const { page = 1, limit = 20 } = req.query;
+    const pageNum = toInt(page, 1);
+    const lim = toInt(limit, 20);
+    const offset = (pageNum - 1) * lim;
+
+    const logsQuery = `
+      SELECT
+        al.*,
+        admin_u.email as admin_email,
+        target_u.email as target_email
+      FROM public.admin_audit_logs al
+      LEFT JOIN public.users admin_u ON al.admin_user_id = admin_u.id
+      LEFT JOIN public.users target_u ON al.target_user_id = target_u.id
+      ORDER BY al.created_at DESC
+      LIMIT $1 OFFSET $2
+    `;
+    const countQuery = 'SELECT COUNT(*) FROM public.admin_audit_logs';
+
+    const [logsResult, countResult] = await Promise.all([
+      dbPool.query(logsQuery, [lim, offset]),
+      dbPool.query(countQuery),
+    ]);
+
+    const totalLogs = parseInt(countResult.rows[0].count);
+    const totalPages = Math.ceil(totalLogs / lim);
+
+    await logAdminAction(adminUserId, 'VIEW_AUDIT_LOGS', null, {}, req);
+
+    res.json({
+      logs: logsResult.rows,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalLogs,
+        hasNext: pageNum < totalPages,
+        hasPrev: pageNum > 1,
+      },
+    });
+  } catch (error) {
+    console.error('Get audit logs error:', error);
+    res.status(500).json({ error: 'Failed to fetch audit logs' });
   }
 });
 
