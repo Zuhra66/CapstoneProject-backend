@@ -49,9 +49,14 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 
 /* ---------- Static for uploaded files ---------- */
-// All files saved under ./uploads (e.g. ./uploads/events/...) are served at /uploads/...
+/**
+ * Any files written under ./uploads (e.g. ./uploads/events/xyz.png)
+ * will be publicly available at:
+ *   http://localhost:5001/uploads/events/xyz.png
+ */
 const uploadsRoot = path.join(__dirname, 'uploads');
 fs.mkdirSync(uploadsRoot, { recursive: true });
+console.log('📂 Serving uploads from:', uploadsRoot);
 app.use('/uploads', express.static(uploadsRoot));
 
 /* ---------- Simple request logger (helps debug 404s) ---------- */
@@ -327,6 +332,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 🍪 Cookie Domain: ${COOKIE_DOMAIN || 'localhost'}
 🔒 Secure Cookies: ${isProd}
 🎯 Allowed Origins: ${allowedOrigins.join(', ')}
+📂 Uploads served at: /uploads  ->  ${uploadsRoot}
   `);
 });
 
