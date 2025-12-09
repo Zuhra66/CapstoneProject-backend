@@ -23,7 +23,7 @@ const FRONTEND_BASE = process.env.FRONTEND_URL ||
         : 'http://localhost:5173');
 
 // Logo URL - confirmed location
-const LOGO_URL = `${FRONTEND_BASE}/assets/logo.png`;
+const LOGO_URL = `${FRONTEND_BASE}/images/logo_mail.png`;
 
 const EMAIL_CONFIG = {
   fromEmail: process.env.EMAIL_FROM || 'EmpowerMEddev@gmail.com',
