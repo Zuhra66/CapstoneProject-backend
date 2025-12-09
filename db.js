@@ -15,17 +15,23 @@ const connectionString =
 // SSL config: on in production (Render, etc.), off locally
 const useSSL = isProd ? { rejectUnauthorized: false } : false;
 
-// create the pool
+// Create the pool
 const pool = new Pool({
   connectionString,
   ssl: useSSL,
+  // These options help with remote DBs that drop idle connections
   keepAlive: true,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
-  max: 10,
+  idleTimeoutMillis: 30000,        // close idle clients after 30s
+  connectionTimeoutMillis: 10000,  // fail if connection takes >10s
+  max: 5,                          // small pool is usually enough
 });
 
-// health check used by /health/db
+// Optional: basic event logging for debugging pool issues
+pool.on('error', (err) => {
+  console.error('Unexpected PG pool error:', err);
+});
+
+// Health check used by /health/db
 async function healthCheck() {
   try {
     const r = await pool.query('SELECT 1 AS ok');
