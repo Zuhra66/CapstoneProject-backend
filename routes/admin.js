@@ -21,6 +21,37 @@ function makeSlug(s) {
   .replace(/\s+/g, '-')
   .replace(/[^a-z0-9-]/g, '');
 }
+function makeSlug(s) {
+  return String(s || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-]/g, '');
+}
+
+// 🔹 NEW: ensure product slug is unique
+async function ensureUniqueProductSlug(baseSlug) {
+  // fall back to a generic slug if needed
+  const rootSlug = baseSlug && baseSlug.length ? baseSlug : 'product';
+  let slug = rootSlug;
+  let suffix = 2;
+
+  while (true) {
+    const { rows } = await dbPool.query(
+      'SELECT 1 FROM public.products WHERE slug = $1 LIMIT 1',
+      [slug]
+    );
+
+    // if no row found, this slug is free
+    if (rows.length === 0) {
+      return slug;
+    }
+
+    // otherwise try "slug-2", "slug-3", etc.
+    slug = `${rootSlug}-${suffix}`;
+    suffix += 1;
+  }
+}
 
 // Auth0 Management API Token Caching
 let managementApiToken = null;
@@ -289,25 +320,37 @@ const updateAuth0User = async (auth0UserId, userData) => {
   }
 };
 
+// helper: check if a string looks like a UUID
+function isUuidLike(value) {
+  if (typeof value !== "string") return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    value
+  );
+}
+
 const logAdminAction = async (
-    adminUserId,
-    actionType,
-    targetId = null,
-    details = {},
-    req = null
+  adminUserId,
+  actionType,
+  targetId = null,
+  details = {},
+  req = null
 ) => {
   try {
     const ip = req?.ip || details.ip || null;
-    const ua = req?.headers['user-agent'] || details.userAgent || null;
+    const ua = req?.headers["user-agent"] || details.userAgent || null;
+
+    // Only store IDs as UUID if they really look like UUIDs.
+    const adminIdForLog = isUuidLike(adminUserId) ? adminUserId : null;
+    const targetUserIdForLog = isUuidLike(targetId) ? targetId : null;
 
     await dbPool.query(
-        `INSERT INTO public.admin_audit_logs
-       (admin_user_id, action_type, target_user_id, details, ip_address, user_agent)
+      `INSERT INTO public.admin_audit_logs
+         (admin_user_id, action_type, target_user_id, details, ip_address, user_agent)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-        [adminUserId, actionType, targetId, details, ip, ua]
+      [adminIdForLog, actionType, targetUserIdForLog, details, ip, ua]
     );
   } catch (error) {
-    console.error('Failed to log admin action:', error);
+    console.error("Failed to log admin action:", error);
   }
 };
 
@@ -1370,6 +1413,11 @@ router.patch('/appointments/:appointmentId/status', async (req, res) => {
   }
 });
 
+// ----------------------
+// PRODUCTS (DOLLARS VERSION)
+// ----------------------
+
+// List products (admin)
 router.get('/products', async (req, res) => {
   try {
     const adminUserId = req.adminUser.id;
@@ -1384,25 +1432,35 @@ router.get('/products', async (req, res) => {
     let i = 0;
 
     if (search) {
-      i++; params.push(`%${search}%`);
+      i++;
+      params.push(`%${search}%`);
       where.push(`(p.name ILIKE $${i} OR p.slug ILIKE $${i})`);
     }
-    if (category) {
-      i++; params.push(category.toString().toLowerCase());
-      where.push(`LOWER(COALESCE(c.slug, REPLACE(c.name,' ','-'))) = $${i}`);
+
+    if (category && category !== 'all') {
+      i++;
+      params.push(category.toLowerCase());
+      where.push(`LOWER(c.slug) = $${i}`);
     }
 
-    const sql = `
+    const listSql = `
       SELECT
-        p.id, p.name, p.slug, p.price_cents, p.image_url, p.external_url,
-        p.category_id, COALESCE(p.is_active, TRUE) AS is_active,
-        json_build_object('name', c.name, 'slug', LOWER(REPLACE(COALESCE(c.slug, c.name, ''), ' ', '-'))) AS category
+        p.id,
+        p.name,
+        p.slug,
+        p.price,
+        p.image_url,
+        p.external_url,
+        p.category_id,
+        COALESCE(p.is_active, TRUE) AS is_active,
+        json_build_object('name', c.name, 'slug', c.slug) AS category
       FROM public.products p
       LEFT JOIN public.categories c ON c.id = p.category_id
       WHERE ${where.join(' AND ')}
       ORDER BY p.id DESC
       LIMIT $${i + 1} OFFSET $${i + 2}
     `;
+
     const countSql = `
       SELECT COUNT(*)
       FROM public.products p
@@ -1410,19 +1468,29 @@ router.get('/products', async (req, res) => {
       WHERE ${where.join(' AND ')}
     `;
 
-    const [rows, count] = await Promise.all([
-      dbPool.query(sql, [...params, lim, offset]),
+    const [listResult, countResult] = await Promise.all([
+      dbPool.query(listSql, [...params, lim, offset]),
       dbPool.query(countSql, params),
     ]);
 
-    await logAdminAction(adminUserId, 'VIEW_PRODUCTS_LIST', null, { search, category, page: pageNum, limit: lim }, req);
+    const total = Number(countResult.rows[0].count) || 0;
+
+    await logAdminAction(
+        adminUserId,
+        'ADMIN_LIST_PRODUCTS',
+        null,
+        { search, category, page: pageNum, limit: lim },
+        req,
+    );
 
     res.json({
-      products: rows.rows,
+      products: listResult.rows,
       pagination: {
         currentPage: pageNum,
-        totalPages: Math.ceil(parseInt(count.rows[0].count) / lim),
-        total: parseInt(count.rows[0].count),
+        totalPages: Math.ceil(total / lim),
+        total,
+        hasNext: pageNum * lim < total,
+        hasPrev: pageNum > 1,
       },
     });
   } catch (e) {
@@ -1431,84 +1499,222 @@ router.get('/products', async (req, res) => {
   }
 });
 
+// CREATE PRODUCT — DOLLARS
 router.post('/products', async (req, res) => {
   try {
     const adminUserId = req.adminUser.id;
-    const { name, price_cents, image_url = null, external_url = null, category_id = null, slug = null, is_active = true } = req.body;
+    const {
+      name,
+      price,
+      image_url,
+      external_url,
+      category_id,
+      slug,
+      is_active = true,
+    } = req.body;
 
-    if (!name || toInt(price_cents) === null) {
-      return res.status(400).json({ error: 'name and price_cents are required' });
+    const priceNumber = Number(price);
+
+    if (!name || !Number.isFinite(priceNumber)) {
+      return res.status(400).json({
+        error: 'Validation error',
+        message: '`name` and numeric `price` (in dollars) are required',
+      });
     }
 
-    const finalSlug = slug ? makeSlug(slug) : makeSlug(name);
+    const baseSlug = slug ? makeSlug(slug) : makeSlug(name);
+    const finalSlug = await ensureUniqueProductSlug(baseSlug);
 
-    const { rows } = await dbPool.query(
-        `INSERT INTO public.products
-         (name, slug, price_cents, image_url, external_url, category_id, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, name, slug, price_cents, image_url, external_url, category_id, is_active`,
-        [name, finalSlug, toInt(price_cents), image_url, external_url, toInt(category_id), !!is_active]
+    let categoryIdValue = null;
+    if (category_id !== undefined && category_id !== null && category_id !== '') {
+      const maybeNum = Number(category_id);
+      categoryIdValue = Number.isFinite(maybeNum) ? maybeNum : category_id;
+    }
+
+    const insertSql = `
+      INSERT INTO public.products
+        (name, slug, price, image_url, external_url, category_id, is_active)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id, name, slug, price, image_url, external_url, category_id, is_active
+    `;
+
+    const { rows } = await dbPool.query(insertSql, [
+      name,
+      finalSlug,
+      priceNumber,
+      image_url || null,
+      external_url || null,
+      categoryIdValue,
+      !!is_active,
+    ]);
+
+    const product = rows[0];
+
+    await logAdminAction(
+        adminUserId,
+        'ADMIN_CREATE_PRODUCT',
+        product.id,
+        { name: product.name, price: product.price },
+        req,
     );
 
-    await logAdminAction(adminUserId, 'CREATE_PRODUCT', rows[0].id, { name, category_id }, req);
-    res.status(201).json(rows[0]);
+    res.status(201).json(product);
   } catch (e) {
     console.error('admin create product error:', e);
-    res.status(500).json({ error: 'Failed to create product' });
+
+    if (e.code === '23505') {
+      return res.status(400).json({
+        error: 'Duplicate product',
+        message: 'A product with this slug or name already exists',
+      });
+    }
+
+    res.status(500).json({ error: 'Failed to create product', message: e.message });
   }
 });
 
+// UPDATE PRODUCT — DOLLARS
 router.put('/products/:id', async (req, res) => {
   try {
     const adminUserId = req.adminUser.id;
-    const id = toInt(req.params.id);
-    if (!id) return res.status(400).json({ error: 'Invalid id' });
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid product ID' });
 
-    const { name, slug, price_cents, image_url, external_url, category_id, is_active } = req.body;
-    const patchedSlug = slug ? makeSlug(slug) : null;
+    const {
+      name,
+      slug,
+      price,
+      image_url,
+      external_url,
+      category_id,
+      is_active,
+    } = req.body;
 
-    const { rows } = await dbPool.query(
-        `UPDATE public.products
-       SET name        = COALESCE($2, name),
-           slug        = COALESCE($3, slug),
-           price_cents = COALESCE($4, price_cents),
-           image_url   = COALESCE($5, image_url),
-           external_url= COALESCE($6, external_url),
-           category_id = COALESCE($7, category_id),
-           is_active   = COALESCE($8, is_active),
-           updated_at  = NOW()
-       WHERE id = $1
-       RETURNING id, name, slug, price_cents, image_url, external_url, category_id, is_active`,
-        [id, name || null, patchedSlug, toInt(price_cents), image_url || null, external_url || null, toInt(category_id), typeof is_active === 'boolean' ? is_active : null]
+    const existingResult = await dbPool.query(
+        'SELECT * FROM public.products WHERE id = $1',
+        [id],
     );
 
-    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    if (!existingResult.rows.length) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
 
-    await logAdminAction(adminUserId, 'UPDATE_PRODUCT', id, req.body, req);
-    res.json(rows[0]);
+    const existing = existingResult.rows[0];
+
+    const newName = name ?? existing.name;
+
+    let newSlug = existing.slug;
+    if (slug || name) {
+      const baseSlug = slug ? makeSlug(slug) : makeSlug(newName);
+      newSlug = await ensureUniqueProductSlug(baseSlug);
+    }
+
+    const priceNumber =
+        price !== undefined && price !== null && price !== ''
+            ? Number(price)
+            : null;
+
+    const hasCategory = Object.prototype.hasOwnProperty.call(req.body, 'category_id');
+    let categoryValue = existing.category_id;
+
+    if (hasCategory) {
+      if (category_id === null || category_id === '') {
+        categoryValue = null;
+      } else {
+        const maybeNum = Number(category_id);
+        categoryValue = Number.isFinite(maybeNum) ? maybeNum : category_id;
+      }
+    }
+
+    const updateSql = `
+      UPDATE public.products
+      SET
+        name        = $2,
+        slug        = $3,
+        price       = COALESCE($4, price),
+        image_url   = COALESCE($5, image_url),
+        external_url= COALESCE($6, external_url),
+        category_id = $7,
+        is_active   = COALESCE($8, is_active),
+        updated_at  = NOW()
+      WHERE id = $1
+      RETURNING id, name, slug, price, image_url, external_url, category_id, is_active
+    `;
+
+    const { rows } = await dbPool.query(updateSql, [
+      id,
+      newName,
+      newSlug,
+      Number.isFinite(priceNumber) ? priceNumber : null,
+      image_url || null,
+      external_url || null,
+      categoryValue,
+      typeof is_active === 'boolean' ? is_active : null,
+    ]);
+
+    const product = rows[0];
+
+    await logAdminAction(
+        adminUserId,
+        'ADMIN_UPDATE_PRODUCT',
+        id,
+        {
+          name: product.name,
+          price: product.price,
+          is_active: product.is_active,
+        },
+        req,
+    );
+
+    res.json(product);
   } catch (e) {
     console.error('admin update product error:', e);
-    res.status(500).json({ error: 'Failed to update product' });
+
+    if (e.code === '23505') {
+      return res.status(400).json({
+        error: 'Duplicate product',
+        message: 'A product with this slug or name already exists',
+      });
+    }
+
+    res.status(500).json({ error: 'Failed to update product', message: e.message });
   }
 });
 
+// DELETE PRODUCT
 router.delete('/products/:id', async (req, res) => {
   try {
     const adminUserId = req.adminUser.id;
-    const id = toInt(req.params.id);
-    if (!id) return res.status(400).json({ error: 'Invalid id' });
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid product ID' });
 
-    const { rowCount } = await dbPool.query(
-        `DELETE FROM public.products WHERE id = $1`,
-        [id]
+    const result = await dbPool.query(
+        'DELETE FROM public.products WHERE id = $1 RETURNING id, name',
+        [id],
     );
-    if (!rowCount) return res.status(404).json({ error: 'Not found' });
 
-    await logAdminAction(adminUserId, 'DELETE_PRODUCT', id, {}, req);
-    res.status(204).end();
+    if (!result.rowCount) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    const deleted = result.rows[0];
+
+    await logAdminAction(
+        adminUserId,
+        'ADMIN_DELETE_PRODUCT',
+        deleted.id,
+        { name: deleted.name },
+        req,
+    );
+
+    res.json({
+      success: true,
+      message: 'Product deleted successfully',
+      deletedProduct: deleted,
+    });
   } catch (e) {
     console.error('admin delete product error:', e);
-    res.status(500).json({ error: 'Failed to delete product' });
+    res.status(500).json({ error: 'Failed to delete product', message: e.message });
   }
 });
 
