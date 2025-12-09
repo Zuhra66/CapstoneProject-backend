@@ -412,6 +412,66 @@ const logAdminAction = async (
 // ----------------------
 // Debug user route
 // ----------------------
+// ADDED: Handle membership when role changes or user becomes inactive
+const syncMembershipWithRole = async (userId, newRole, isActive) => {
+  try {
+    console.log('🔄 Syncing membership with role for user:', userId);
+    console.log('🔧 New role:', newRole, 'Is active:', isActive);
+
+    // Get current membership status
+    const membershipResult = await dbPool.query(
+        `SELECT um.status, um.id FROM user_memberships um WHERE um.user_id = $1`,
+        [userId]
+    );
+
+    if (membershipResult.rows.length > 0) {
+      const currentMembership = membershipResult.rows[0];
+
+      // If user is being deactivated, cancel membership
+      if (!isActive && currentMembership.status === 'active') {
+        console.log('⚠️ User deactivated - cancelling membership');
+        await dbPool.query(
+            `UPDATE user_memberships SET status = 'cancelled', updated_at = NOW() WHERE id = $1`,
+            [currentMembership.id]
+        );
+        console.log('✅ Membership cancelled due to user deactivation');
+      }
+
+      // If role changes from Member to User, cancel membership
+      if (newRole !== 'Member' && currentMembership.status === 'active') {
+        console.log('⚠️ Role changed from Member to User - cancelling membership');
+        await dbPool.query(
+            `UPDATE user_memberships SET status = 'cancelled', updated_at = NOW() WHERE id = $1`,
+            [currentMembership.id]
+        );
+        console.log('✅ Membership cancelled due to role change');
+      }
+
+      // If role changes to Member and user is active, ensure membership is active
+      if (newRole === 'Member' && isActive && currentMembership.status !== 'active') {
+        console.log('⚠️ Role changed to Member - activating membership');
+        await dbPool.query(
+            `UPDATE user_memberships SET status = 'active', updated_at = NOW() WHERE id = $1`,
+            [currentMembership.id]
+        );
+        console.log('✅ Membership activated due to role change to Member');
+      }
+    }
+
+    // If role is Member but user is inactive, change role to User
+    if (newRole === 'Member' && !isActive) {
+      console.log('⚠️ Cannot have inactive Member - changing role to User');
+      return 'User'; // Return new role
+    }
+
+    return newRole; // Return original role if no change needed
+  } catch (error) {
+    console.error('❌ Error syncing membership with role:', error);
+    return newRole; // Return original role on error
+  }
+};
+
+// Enhanced debug route
 router.get('/debug-user/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
@@ -1018,13 +1078,43 @@ router.get('/users', async (req, res) => {
     if (status === 'inactive') where.push('is_active = false');
 
     const usersSql = `
-      SELECT id, auth0_id, email, first_name, last_name, name, role, is_active,
-             is_admin, auth_provider, created_at, updated_at
+      SELECT
+        users.id,
+        users.auth0_id,
+        users.email,
+        users.first_name,
+        users.last_name,
+        users.name,
+        users.role,
+        users.is_active,
+        users.is_admin,
+        users.auth_provider,
+        users.created_at,
+        users.updated_at,
+
+        -- Add correct membership object
+        json_build_object(
+          'status', um.status,
+          'start_date', um.start_at,
+          'end_date', um.end_at,
+          'plan_name', mp.name
+        ) AS membership
+
       FROM public.users
+
+      LEFT JOIN user_memberships um
+        ON um.user_id = users.id 
+        AND um.status = 'active'
+
+      LEFT JOIN membership_plans mp
+        ON mp.id = um.plan_id
+
       WHERE ${where.join(' AND ')}
-      ORDER BY created_at DESC
-      LIMIT $${i + 1} OFFSET $${i + 2}
+
+      ORDER BY users.created_at DESC
+      LIMIT $${i+1} OFFSET $${i+2}
     `;
+
     const countSql = `SELECT COUNT(*) FROM public.users WHERE ${where.join(' AND ')}`;
 
     const [usersResult, countResult] = await Promise.all([
@@ -1105,6 +1195,7 @@ router.get('/users/:userId', async (req, res) => {
   }
 });
 
+// UPDATED: PUT route with membership sync logic
 router.put('/users/:userId', async (req, res) => {
   try {
     const adminUserId = req.adminUser.id;
@@ -1123,6 +1214,7 @@ router.put('/users/:userId', async (req, res) => {
       });
     }
 
+    // Get user with auth0_id and current values
     const existingUser = await dbPool.query(
         'SELECT id, auth0_id, email, is_active, role, is_admin FROM public.users WHERE id = $1',
         [userId],
@@ -1136,6 +1228,11 @@ router.put('/users/:userId', async (req, res) => {
     }
 
     const targetUser = existingUser.rows[0];
+    console.log('🎯 Target user auth0_id:', targetUser.auth0_id);
+    console.log('🎯 Current role in DB:', targetUser.role);
+    console.log('🎯 Current is_active in DB:', targetUser.is_active);
+    console.log('🎯 New role from request:', role);
+    console.log('🎯 New is_active from request:', is_active);
 
     const validRoles = ['Administrator', 'Provider', 'Member', 'User'];
     if (role && !validRoles.includes(role)) {
@@ -1145,6 +1242,20 @@ router.put('/users/:userId', async (req, res) => {
       });
     }
 
+    // ADDED: Sync membership with role and active status
+    let finalRole = role || targetUser.role;
+    let finalIsActive = is_active !== undefined ? is_active : targetUser.is_active;
+
+    // Check for Member/inactive conflict
+    if (finalRole === 'Member' && !finalIsActive) {
+      console.log('⚠️ Cannot have inactive Member - changing role to User');
+      finalRole = 'User';
+    }
+
+    // Sync membership based on role changes
+    await syncMembershipWithRole(userId, finalRole, finalIsActive);
+
+    // Update in PostgreSQL
     const updateQuery = `
       UPDATE public.users
       SET
@@ -1169,10 +1280,16 @@ router.put('/users/:userId', async (req, res) => {
       is_active !== undefined ? is_active : true,
       is_admin !== undefined ? is_admin : false,
       userId,
+      finalRole,
+      finalIsActive,
+      is_admin !== undefined ? is_admin : targetUser.is_admin,
+      userId
     ]);
 
     const updatedUser = updateResult.rows[0];
     console.log('✅ User updated in PostgreSQL');
+    console.log('✅ Updated user role in DB:', updatedUser.role);
+    console.log('✅ Updated user is_active in DB:', updatedUser.is_active);
 
     let auth0SyncResult = null;
     let auth0RoleSyncResult = null;
@@ -1212,6 +1329,13 @@ router.put('/users/:userId', async (req, res) => {
         },
         req,
     );
+    await logAdminAction(adminUserId, 'UPDATE_USER', userId, {
+      first_name, last_name, name, email, role: finalRole, is_active: finalIsActive, is_admin,
+      auth0_sync: !!auth0SyncResult,
+      auth0_role_sync: !!auth0RoleSyncResult,
+      auth0_id: targetUser.auth0_id,
+      membership_synced: true
+    }, req);
 
     res.json({
       message:
@@ -1221,6 +1345,7 @@ router.put('/users/:userId', async (req, res) => {
       auth0_synced: !!auth0SyncResult,
       auth0_role_synced: !!auth0RoleSyncResult,
       auth0_id_present: !!targetUser.auth0_id,
+      role_adjusted: finalRole !== role ? 'Role adjusted from Member to User because user is inactive' : null
     });
   } catch (error) {
     console.error('❌ Error updating user:', error);
@@ -1239,6 +1364,7 @@ router.put('/users/:userId', async (req, res) => {
   }
 });
 
+// UPDATED: PATCH route for role changes
 router.patch('/users/:userId/role', async (req, res) => {
   try {
     const adminUserId = req.adminUser.id;
@@ -1272,6 +1398,17 @@ router.patch('/users/:userId/role', async (req, res) => {
       });
     }
 
+    // ADDED: Check if trying to set Member role on inactive user
+    if (role === 'Member' && !targetUser.is_active) {
+      return res.status(400).json({
+        error: 'Invalid operation',
+        message: 'Cannot set Member role on inactive user'
+      });
+    }
+
+    // ADDED: Sync membership with role change
+    await syncMembershipWithRole(userId, role, targetUser.is_active);
+
     const result = await dbPool.query(
         'UPDATE public.users SET role = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
         [role, userId],
@@ -1285,6 +1422,7 @@ router.patch('/users/:userId/role', async (req, res) => {
           role: updatedUser.role,
           is_active: targetUser.is_active,
           is_admin: updatedUser.is_admin,
+          is_admin: targetUser.is_admin
         });
       } catch (auth0Error) {
         console.error(
@@ -1301,6 +1439,12 @@ router.patch('/users/:userId/role', async (req, res) => {
         { role, previous_role: targetUser.role, new_role: updatedUser.role },
         req,
     );
+    await logAdminAction(adminUserId, 'UPDATE_USER_ROLE', userId, {
+      role,
+      previous_role: targetUser.role,
+      new_role: updatedUser.role,
+      membership_synced: true
+    }, req);
 
     res.json({
       user: updatedUser,
@@ -1312,6 +1456,7 @@ router.patch('/users/:userId/role', async (req, res) => {
   }
 });
 
+// UPDATED: PATCH route for status changes
 router.patch('/users/:userId/status', async (req, res) => {
   try {
     const adminUserId = req.adminUser.id;
@@ -1322,6 +1467,7 @@ router.patch('/users/:userId/status', async (req, res) => {
     console.log('User ID:', userId);
     console.log('New is_active value:', is_active);
 
+    // Get user to check auth0_id and current role
     const userResult = await dbPool.query(
         'SELECT auth0_id, is_active as current_active, role, is_admin FROM public.users WHERE id = $1',
         [userId],
@@ -1332,6 +1478,8 @@ router.patch('/users/:userId/status', async (req, res) => {
     }
 
     const targetUser = userResult.rows[0];
+    console.log('Current is_active in DB:', targetUser.current_active);
+    console.log('Current role in DB:', targetUser.role);
 
     if (toInt(userId) === adminUserId && !is_active) {
       return res.status(400).json({
@@ -1340,12 +1488,32 @@ router.patch('/users/:userId/status', async (req, res) => {
       });
     }
 
+    // ADDED: Check if deactivating a Member
+    let roleAdjustment = null;
+    let finalRole = targetUser.role;
+
+    if (!is_active && targetUser.role === 'Member') {
+      console.log('⚠️ Deactivating a Member - changing role to User');
+      finalRole = 'User';
+      roleAdjustment = 'Role changed from Member to User';
+    }
+
+    // ADDED: Sync membership with status change
+    await syncMembershipWithRole(userId, finalRole, is_active);
+
     const result = await dbPool.query(
         'UPDATE public.users SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
         [!!is_active, userId],
     );
 
     const updatedUser = result.rows[0];
+        'UPDATE public.users SET is_active = $1, role = $2, updated_at = NOW() WHERE id = $3 RETURNING *',
+        [!!is_active, finalRole, userId]
+    );
+
+    const updatedUser = result.rows[0];
+    console.log('Updated is_active in DB:', updatedUser.is_active);
+    console.log('Updated role in DB:', updatedUser.role);
 
     if (targetUser.auth0_id) {
       try {
@@ -1353,6 +1521,15 @@ router.patch('/users/:userId/status', async (req, res) => {
           is_active: updatedUser.is_active,
           role: targetUser.role,
           is_admin: targetUser.is_admin,
+        console.log('🔄 Syncing status to Auth0');
+        console.log('is_active:', updatedUser.is_active);
+        console.log('blocked in Auth0:', !updatedUser.is_active);
+        console.log('new role:', updatedUser.role);
+
+        await updateAuth0User(targetUser.auth0_id, {
+          is_active: updatedUser.is_active,
+          role: updatedUser.role,
+          is_admin: targetUser.is_admin
         });
       } catch (auth0Error) {
         console.error(
@@ -1373,10 +1550,18 @@ router.patch('/users/:userId/status', async (req, res) => {
         },
         req,
     );
+    await logAdminAction(adminUserId, 'UPDATE_USER_STATUS', userId, {
+      is_active: !!is_active,
+      previous_status: targetUser.current_active,
+      new_status: updatedUser.is_active,
+      role_adjustment: roleAdjustment,
+      membership_synced: true
+    }, req);
 
     res.json({
       user: updatedUser,
       auth0_synced: !!targetUser.auth0_id,
+      role_adjusted: roleAdjustment
     });
   } catch (error) {
     console.error('Update user status error:', error);
@@ -2419,6 +2604,54 @@ router.get('/audit-logs', async (req, res) => {
     ]);
 
     const totalLogs = parseInt(countResult.rows[0].count, 10);
+    const totalPages = Math.ceil(totalLogs / lim);
+
+    await logAdminAction(adminUserId, 'VIEW_AUDIT_LOGS', null, {}, req);
+
+    res.json({
+      logs: logsResult.rows,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalLogs,
+        hasNext: pageNum < totalPages,
+        hasPrev: pageNum > 1,
+      },
+    });
+  } catch (error) {
+    console.error('Get audit logs error:', error);
+    res.status(500).json({ error: 'Failed to fetch audit logs' });
+  }
+});
+
+// Keep your audit-logs route that was in your original version
+router.get('/audit-logs', async (req, res) => {
+  try {
+    const adminUserId = req.adminUser.id;
+    const { page = 1, limit = 20 } = req.query;
+    const pageNum = toInt(page, 1);
+    const lim = toInt(limit, 20);
+    const offset = (pageNum - 1) * lim;
+
+    const logsQuery = `
+      SELECT
+        al.*,
+        admin_u.email as admin_email,
+        target_u.email as target_email
+      FROM public.admin_audit_logs al
+      LEFT JOIN public.users admin_u ON al.admin_user_id = admin_u.id
+      LEFT JOIN public.users target_u ON al.target_user_id = target_u.id
+      ORDER BY al.created_at DESC
+      LIMIT $1 OFFSET $2
+    `;
+    const countQuery = 'SELECT COUNT(*) FROM public.admin_audit_logs';
+
+    const [logsResult, countResult] = await Promise.all([
+      dbPool.query(logsQuery, [lim, offset]),
+      dbPool.query(countQuery),
+    ]);
+
+    const totalLogs = parseInt(countResult.rows[0].count);
     const totalPages = Math.ceil(totalLogs / lim);
 
     await logAdminAction(adminUserId, 'VIEW_AUDIT_LOGS', null, {}, req);

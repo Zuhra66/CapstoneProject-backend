@@ -13,9 +13,19 @@ const authRoutes      = require('./routes/auth');
 const syncRoutes      = require('./routes/sync');
 const adminRoutes     = require('./routes/admin');
 const catalogRouter   = require('./routes/catalog');
+const { checkJwt, attachAdminUser, requireAdmin } = require('./middleware/admin-check');
+
+// Import routes
+const profileRoutes = require('./routes/profile');
+const authRoutes = require('./routes/auth');
+const syncRoutes = require('./routes/sync');
+const adminRoutes = require('./routes/admin');
+const catalogRouter = require('./routes/catalog');
 const educationRouter = require('./routes/education');
-const blogRoutes      = require('./routes/blog');
-const eventsRoutes    = require('./routes/events');
+const blogRoutes = require('./routes/blog');
+const eventsRoutes = require('./routes/events');
+const calendarRoutes = require('./routes/calendar');
+const membershipRoutes = require('./routes/memberships');
 const newsletterRoutes = require('./routes/newsletter');
 const auditLogsRoutes = require('./routes/auditLogs');  // NEW: Audit logs routes
 
@@ -220,6 +230,14 @@ const csrfSkipMiddleware = (req, res, next) => {
 
       // OPTIONS requests (preflight)
       req.method === 'OPTIONS'
+      fullPath === '/health' ||
+      fullPath === '/health/db' ||
+      fullPath === '/debug/cookies' ||
+      fullPath === '/' ||
+      fullPath.startsWith('/api/newsletter') ||
+      fullPath.startsWith('/api/audit') ||  // NEW: Skip CSRF for audit logs
+      fullPath.startsWith('/calendar') ||
+      fullPath.startsWith('/memberships')
   ) {
     console.log(`🔓 Skipping CSRF for: ${fullPath}`);
     return next();
@@ -264,6 +282,12 @@ app.post('/csrf-test', csrfProtection, (req, res) => {
 /* ---------- API routes ---------- */
 // Mount all API routes AFTER CSRF and audit middleware
 app.use('/api/newsletter', newsletterRoutes);
+app.use('/internal', syncRoutes);
+app.use('/auth', authRoutes);
+app.use('/calendar', calendarRoutes);
+app.use('/api/blog', blogRoutes);
+app.use('/api/events', eventsRoutes);
+app.use('/memberships', membershipRoutes);
 app.use('/api/profile', profileRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api', catalogRouter);
@@ -336,6 +360,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 📂 Uploads served at: /uploads  ->  ${uploadsRoot}
 
 
+🎯 Allowed Origins: ${allowedOrigins.join(', ')}
   `);
 });
 
@@ -355,5 +380,16 @@ async function shutdown() {
     }
   });
 }
+
+module.exports = app;
+/* ---------- Log DB Local Connection ---------- */
+(async () => {
+  try {
+    const { rows } = await pool.query('SELECT NOW() AS now');
+    console.log('✅ Database connected @', rows[0].now);
+  } catch (err) {
+    console.error('❌ Database connection error:', err.message);
+  }
+})();
 
 module.exports = app;

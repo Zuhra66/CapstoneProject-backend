@@ -25,6 +25,12 @@ function normalizeLike(s) {
  *  GET /api/categories
  * ------------------------------------------------------------------ */
 router.get('/categories', async (req, res) => {
+const express = require('express');
+const router = express.Router();
+const { pool } = require('../db');
+
+// GET /api/categories
+router.get('/categories', async (_req, res) => {
   try {
     const { rows } = await dbPool.query(
       `
