@@ -311,6 +311,65 @@ const logAdminAction = async (
   }
 };
 
+// ADDED: Handle membership when role changes or user becomes inactive
+const syncMembershipWithRole = async (userId, newRole, isActive) => {
+  try {
+    console.log('🔄 Syncing membership with role for user:', userId);
+    console.log('🔧 New role:', newRole, 'Is active:', isActive);
+
+    // Get current membership status
+    const membershipResult = await dbPool.query(
+        `SELECT um.status, um.id FROM user_memberships um WHERE um.user_id = $1`,
+        [userId]
+    );
+
+    if (membershipResult.rows.length > 0) {
+      const currentMembership = membershipResult.rows[0];
+
+      // If user is being deactivated, cancel membership
+      if (!isActive && currentMembership.status === 'active') {
+        console.log('⚠️ User deactivated - cancelling membership');
+        await dbPool.query(
+            `UPDATE user_memberships SET status = 'cancelled', updated_at = NOW() WHERE id = $1`,
+            [currentMembership.id]
+        );
+        console.log('✅ Membership cancelled due to user deactivation');
+      }
+
+      // If role changes from Member to User, cancel membership
+      if (newRole !== 'Member' && currentMembership.status === 'active') {
+        console.log('⚠️ Role changed from Member to User - cancelling membership');
+        await dbPool.query(
+            `UPDATE user_memberships SET status = 'cancelled', updated_at = NOW() WHERE id = $1`,
+            [currentMembership.id]
+        );
+        console.log('✅ Membership cancelled due to role change');
+      }
+
+      // If role changes to Member and user is active, ensure membership is active
+      if (newRole === 'Member' && isActive && currentMembership.status !== 'active') {
+        console.log('⚠️ Role changed to Member - activating membership');
+        await dbPool.query(
+            `UPDATE user_memberships SET status = 'active', updated_at = NOW() WHERE id = $1`,
+            [currentMembership.id]
+        );
+        console.log('✅ Membership activated due to role change to Member');
+      }
+    }
+
+    // If role is Member but user is inactive, change role to User
+    if (newRole === 'Member' && !isActive) {
+      console.log('⚠️ Cannot have inactive Member - changing role to User');
+      return 'User'; // Return new role
+    }
+
+    return newRole; // Return original role if no change needed
+  } catch (error) {
+    console.error('❌ Error syncing membership with role:', error);
+    return newRole; // Return original role on error
+  }
+};
+
 // Enhanced debug route
 router.get('/debug-user/:userId', async (req, res) => {
   try {
@@ -418,15 +477,100 @@ router.get('/debug-user/:userId', async (req, res) => {
   }
 });
 
+// ============================================
+// UPDATED DASHBOARD-STATS ROUTE WITH AUDIT STATS
+// ============================================
 router.get('/dashboard-stats', async (req, res) => {
   try {
+    // Get users stats
     const totalUsers = await dbPool.query('SELECT COUNT(*) FROM public.users');
+    const activeUsers = await dbPool.query('SELECT COUNT(*) FROM public.users WHERE is_active = true');
+    const newUsersThisMonth = await dbPool.query(`
+      SELECT COUNT(*) 
+      FROM public.users 
+      WHERE created_at >= date_trunc('month', CURRENT_DATE)
+    `);
+
+    // ✅ ADD NEWSLETTER STATS
+    let newsletterTotal = 0;
+    let newsletterActive = 0;
+
+    try {
+      const newsletterResult = await dbPool.query(`
+        SELECT 
+          COUNT(*) as total,
+          SUM(CASE WHEN active THEN 1 ELSE 0 END) as active
+        FROM newsletter_subscribers
+      `);
+
+      if (newsletterResult.rows.length > 0) {
+        newsletterTotal = parseInt(newsletterResult.rows[0].total) || 0;
+        newsletterActive = parseInt(newsletterResult.rows[0].active) || 0;
+      }
+    } catch (newsletterError) {
+      console.log('Newsletter stats not available:', newsletterError.message);
+      // Newsletter table might not exist yet, that's okay
+    }
+
+    // ✅ ADD AUDIT LOG STATS
+    let auditStats = {
+      total: 0,
+      today: 0,
+      security: 0,
+      authentication: 0,
+      access: 0,
+      modification: 0
+    };
+
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      // Run all audit stat queries
+      const auditQueries = await Promise.all([
+        // Total audit logs
+        dbPool.query('SELECT COUNT(*) FROM audit_logs'),
+
+        // Today's audit logs
+        dbPool.query('SELECT COUNT(*) FROM audit_logs WHERE created_at >= $1', [today]),
+
+        // Security events
+        dbPool.query(`SELECT COUNT(*) FROM audit_logs WHERE event_category = 'security'`),
+
+        // Authentication events
+        dbPool.query(`SELECT COUNT(*) FROM audit_logs WHERE event_category = 'authentication'`),
+
+        // Access events
+        dbPool.query(`SELECT COUNT(*) FROM audit_logs WHERE event_category = 'access'`),
+
+        // Modification events
+        dbPool.query(`SELECT COUNT(*) FROM audit_logs WHERE event_category = 'modification'`)
+      ]);
+
+      auditStats = {
+        total: parseInt(auditQueries[0].rows[0].count) || 0,
+        today: parseInt(auditQueries[1].rows[0].count) || 0,
+        security: parseInt(auditQueries[2].rows[0].count) || 0,
+        authentication: parseInt(auditQueries[3].rows[0].count) || 0,
+        access: parseInt(auditQueries[4].rows[0].count) || 0,
+        modification: parseInt(auditQueries[5].rows[0].count) || 0
+      };
+
+    } catch (auditError) {
+      console.log('Audit stats not available:', auditError.message);
+      // Audit table might not have all columns yet, that's okay
+    }
 
     const stats = {
       users: {
         total: parseInt(totalUsers.rows[0].count),
-        active: 0,
-        newThisMonth: 0
+        active: parseInt(activeUsers.rows[0].count),
+        newThisMonth: parseInt(newUsersThisMonth.rows[0].count)
+      },
+      // ✅ Newsletter stats added here
+      newsletter: {
+        total: newsletterTotal,
+        active: newsletterActive
       },
       appointments: {
         total: 0,
@@ -446,23 +590,156 @@ router.get('/dashboard-stats', async (req, res) => {
         active: 0
       },
       messages: { total: 0 },
-      audit: { total: 0 }
+      // ✅ Audit stats added here
+      audit: auditStats
     };
 
+    // Try to get additional stats if tables exist
+    try {
+      // Appointments stats
+      const appointmentsTotal = await dbPool.query('SELECT COUNT(*) FROM appointments');
+      const appointmentsPending = await dbPool.query("SELECT COUNT(*) FROM appointments WHERE status = 'pending'");
+      const appointmentsToday = await dbPool.query(`
+        SELECT COUNT(*) FROM appointments 
+        WHERE DATE(appointment_date) = CURRENT_DATE
+      `);
+      stats.appointments = {
+        total: parseInt(appointmentsTotal.rows[0].count) || 0,
+        pending: parseInt(appointmentsPending.rows[0].count) || 0,
+        today: parseInt(appointmentsToday.rows[0].count) || 0
+      };
+    } catch (e) {
+      console.log('Appointments stats not available:', e.message);
+    }
+
+    try {
+      // Products stats
+      const productsTotal = await dbPool.query('SELECT COUNT(*) FROM products');
+      stats.products.total = parseInt(productsTotal.rows[0].count) || 0;
+    } catch (e) {
+      console.log('Products stats not available:', e.message);
+    }
+
+    try {
+      // Blog stats
+      const blogTotal = await dbPool.query('SELECT COUNT(*) FROM blog_posts');
+      stats.blog.total = parseInt(blogTotal.rows[0].count) || 0;
+    } catch (e) {
+      console.log('Blog stats not available:', e.message);
+    }
+
+    try {
+      // Education stats
+      const educationVideos = await dbPool.query('SELECT COUNT(*) FROM education_videos');
+      const educationArticles = await dbPool.query('SELECT COUNT(*) FROM education_articles');
+      stats.education = {
+        videos: parseInt(educationVideos.rows[0].count) || 0,
+        articles: parseInt(educationArticles.rows[0].count) || 0
+      };
+    } catch (e) {
+      console.log('Education stats not available:', e.message);
+    }
+
+    try {
+      // Categories stats
+      const categoriesTotal = await dbPool.query('SELECT COUNT(*) FROM categories');
+      stats.categories.total = parseInt(categoriesTotal.rows[0].count) || 0;
+    } catch (e) {
+      console.log('Categories stats not available:', e.message);
+    }
+
+    try {
+      // Events stats (upcoming)
+      const upcomingEvents = await dbPool.query(`
+        SELECT COUNT(*) FROM events 
+        WHERE event_date >= CURRENT_DATE
+      `);
+      stats.events.upcoming = parseInt(upcomingEvents.rows[0].count) || 0;
+    } catch (e) {
+      console.log('Events stats not available:', e.message);
+    }
+
+    try {
+      // Memberships stats
+      const membershipPlans = await dbPool.query('SELECT COUNT(*) FROM membership_plans');
+      const activeMemberships = await dbPool.query("SELECT COUNT(*) FROM user_memberships WHERE status = 'active'");
+      stats.memberships = {
+        plans: parseInt(membershipPlans.rows[0].count) || 0,
+        active: parseInt(activeMemberships.rows[0].count) || 0
+      };
+    } catch (e) {
+      console.log('Memberships stats not available:', e.message);
+    }
+
+    try {
+      // Messages stats
+      const messagesTotal = await dbPool.query('SELECT COUNT(*) FROM contact_messages');
+      stats.messages.total = parseInt(messagesTotal.rows[0].count) || 0;
+    } catch (e) {
+      console.log('Messages stats not available:', e.message);
+    }
+
+    // Get user roles distribution
+    try {
+      const rolesResult = await dbPool.query(`
+        SELECT role, COUNT(*) as count 
+        FROM users 
+        WHERE role IS NOT NULL 
+        GROUP BY role
+      `);
+
+      stats.users.roles = {};
+      rolesResult.rows.forEach(row => {
+        stats.users.roles[row.role] = parseInt(row.count);
+      });
+    } catch (e) {
+      console.log('User roles stats not available:', e.message);
+    }
+
     await logAdminAction(req.adminUser.id, 'VIEW_DASHBOARD_STATS', null, {}, req);
+
+    console.log('📊 Dashboard stats generated successfully');
     res.json(stats);
+
   } catch (error) {
+    console.error('❌ Dashboard stats error:', error);
+
     const fallbackStats = {
-      users: { total: 1, active: 1, newThisMonth: 0 },
-      appointments: { total: 0, pending: 0, today: 0 },
+      users: {
+        total: 1,
+        active: 1,
+        newThisMonth: 0
+      },
+      newsletter: {
+        total: 0,
+        active: 0
+      },
+      appointments: {
+        total: 0,
+        pending: 0,
+        today: 0
+      },
       products: { total: 0 },
       categories: { total: 0 },
       blog: { total: 0 },
-      education: { videos: 0, articles: 0 },
+      education: {
+        videos: 0,
+        articles: 0
+      },
       events: { upcoming: 0 },
-      memberships: { plans: 0, active: 0 },
+      memberships: {
+        plans: 0,
+        active: 0
+      },
       messages: { total: 0 },
-      audit: { total: 0 }
+      audit: {
+        total: 0,
+        today: 0,
+        security: 0,
+        authentication: 0,
+        access: 0,
+        modification: 0
+      }
     };
 
     res.json(fallbackStats);
@@ -534,7 +811,7 @@ router.get('/users', async (req, res) => {
       ORDER BY users.created_at DESC
       LIMIT $${i+1} OFFSET $${i+2}
     `;
-    
+
     const countSql = `SELECT COUNT(*) FROM public.users WHERE ${where.join(' AND ')}`;
 
     const [usersResult, countResult] = await Promise.all([
@@ -615,6 +892,7 @@ router.get('/users/:userId', async (req, res) => {
   }
 });
 
+// UPDATED: PUT route with membership sync logic
 router.put('/users/:userId', async (req, res) => {
   try {
     const adminUserId = req.adminUser.id;
@@ -641,7 +919,7 @@ router.put('/users/:userId', async (req, res) => {
       });
     }
 
-    // Get user with auth0_id
+    // Get user with auth0_id and current values
     const existingUser = await dbPool.query(
         'SELECT id, auth0_id, email, is_active, role, is_admin FROM public.users WHERE id = $1',
         [userId]
@@ -657,7 +935,9 @@ router.put('/users/:userId', async (req, res) => {
     const targetUser = existingUser.rows[0];
     console.log('🎯 Target user auth0_id:', targetUser.auth0_id);
     console.log('🎯 Current role in DB:', targetUser.role);
+    console.log('🎯 Current is_active in DB:', targetUser.is_active);
     console.log('🎯 New role from request:', role);
+    console.log('🎯 New is_active from request:', is_active);
 
     // Validate role against your available roles - UPDATED to match your Auth0 roles
     const validRoles = ['Administrator', 'Provider', 'Member', 'User'];
@@ -667,6 +947,19 @@ router.put('/users/:userId', async (req, res) => {
         message: `Role must be one of: ${validRoles.join(', ')}`
       });
     }
+
+    // ADDED: Sync membership with role and active status
+    let finalRole = role || targetUser.role;
+    let finalIsActive = is_active !== undefined ? is_active : targetUser.is_active;
+
+    // Check for Member/inactive conflict
+    if (finalRole === 'Member' && !finalIsActive) {
+      console.log('⚠️ Cannot have inactive Member - changing role to User');
+      finalRole = 'User';
+    }
+
+    // Sync membership based on role changes
+    await syncMembershipWithRole(userId, finalRole, finalIsActive);
 
     // Update in PostgreSQL
     const updateQuery = `
@@ -689,15 +982,16 @@ router.put('/users/:userId', async (req, res) => {
       last_name || null,
       name || null,
       email,
-      role || 'Member', // Default to 'Member' to match your Auth0 roles
-      is_active !== undefined ? is_active : true,
-      is_admin !== undefined ? is_admin : false,
+      finalRole,
+      finalIsActive,
+      is_admin !== undefined ? is_admin : targetUser.is_admin,
       userId
     ]);
 
     const updatedUser = updateResult.rows[0];
     console.log('✅ User updated in PostgreSQL');
     console.log('✅ Updated user role in DB:', updatedUser.role);
+    console.log('✅ Updated user is_active in DB:', updatedUser.is_active);
 
     // Sync with Auth0 if user has an auth0_id
     let auth0SyncResult = null;
@@ -724,10 +1018,11 @@ router.put('/users/:userId', async (req, res) => {
     }
 
     await logAdminAction(adminUserId, 'UPDATE_USER', userId, {
-      first_name, last_name, name, email, role, is_active, is_admin,
+      first_name, last_name, name, email, role: finalRole, is_active: finalIsActive, is_admin,
       auth0_sync: !!auth0SyncResult,
       auth0_role_sync: !!auth0RoleSyncResult,
-      auth0_id: targetUser.auth0_id
+      auth0_id: targetUser.auth0_id,
+      membership_synced: true
     }, req);
 
     res.json({
@@ -736,7 +1031,8 @@ router.put('/users/:userId', async (req, res) => {
       user: updatedUser,
       auth0_synced: !!auth0SyncResult,
       auth0_role_synced: !!auth0RoleSyncResult,
-      auth0_id_present: !!targetUser.auth0_id
+      auth0_id_present: !!targetUser.auth0_id,
+      role_adjusted: finalRole !== role ? 'Role adjusted from Member to User because user is inactive' : null
     });
 
   } catch (error) {
@@ -756,6 +1052,7 @@ router.put('/users/:userId', async (req, res) => {
   }
 });
 
+// UPDATED: PATCH route for role changes
 router.patch('/users/:userId/role', async (req, res) => {
   try {
     const adminUserId = req.adminUser.id;
@@ -788,6 +1085,17 @@ router.patch('/users/:userId/role', async (req, res) => {
       });
     }
 
+    // ADDED: Check if trying to set Member role on inactive user
+    if (role === 'Member' && !targetUser.is_active) {
+      return res.status(400).json({
+        error: 'Invalid operation',
+        message: 'Cannot set Member role on inactive user'
+      });
+    }
+
+    // ADDED: Sync membership with role change
+    await syncMembershipWithRole(userId, role, targetUser.is_active);
+
     const result = await dbPool.query(
         'UPDATE public.users SET role = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
         [role, userId]
@@ -804,7 +1112,7 @@ router.patch('/users/:userId/role', async (req, res) => {
         await updateAuth0User(targetUser.auth0_id, {
           role: updatedUser.role,
           is_active: targetUser.is_active,
-          is_admin: updatedUser.is_admin
+          is_admin: targetUser.is_admin
         });
 
         console.log('✅ Auth0 role sync completed');
@@ -818,7 +1126,8 @@ router.patch('/users/:userId/role', async (req, res) => {
     await logAdminAction(adminUserId, 'UPDATE_USER_ROLE', userId, {
       role,
       previous_role: targetUser.role,
-      new_role: updatedUser.role
+      new_role: updatedUser.role,
+      membership_synced: true
     }, req);
 
     res.json({
@@ -831,6 +1140,7 @@ router.patch('/users/:userId/role', async (req, res) => {
   }
 });
 
+// UPDATED: PATCH route for status changes
 router.patch('/users/:userId/status', async (req, res) => {
   try {
     const adminUserId = req.adminUser.id;
@@ -841,7 +1151,7 @@ router.patch('/users/:userId/status', async (req, res) => {
     console.log('User ID:', userId);
     console.log('New is_active value:', is_active);
 
-    // Get user to check auth0_id
+    // Get user to check auth0_id and current role
     const userResult = await dbPool.query(
         'SELECT auth0_id, is_active as current_active, role, is_admin FROM public.users WHERE id = $1',
         [userId]
@@ -851,6 +1161,7 @@ router.patch('/users/:userId/status', async (req, res) => {
 
     const targetUser = userResult.rows[0];
     console.log('Current is_active in DB:', targetUser.current_active);
+    console.log('Current role in DB:', targetUser.role);
 
     if (toInt(userId) === adminUserId && !is_active) {
       return res.status(400).json({
@@ -859,13 +1170,27 @@ router.patch('/users/:userId/status', async (req, res) => {
       });
     }
 
+    // ADDED: Check if deactivating a Member
+    let roleAdjustment = null;
+    let finalRole = targetUser.role;
+
+    if (!is_active && targetUser.role === 'Member') {
+      console.log('⚠️ Deactivating a Member - changing role to User');
+      finalRole = 'User';
+      roleAdjustment = 'Role changed from Member to User';
+    }
+
+    // ADDED: Sync membership with status change
+    await syncMembershipWithRole(userId, finalRole, is_active);
+
     const result = await dbPool.query(
-        'UPDATE public.users SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
-        [!!is_active, userId]
+        'UPDATE public.users SET is_active = $1, role = $2, updated_at = NOW() WHERE id = $3 RETURNING *',
+        [!!is_active, finalRole, userId]
     );
 
     const updatedUser = result.rows[0];
     console.log('Updated is_active in DB:', updatedUser.is_active);
+    console.log('Updated role in DB:', updatedUser.role);
 
     // Sync with Auth0 - Use the 'blocked' field (inverse of is_active)
     if (targetUser.auth0_id) {
@@ -873,11 +1198,12 @@ router.patch('/users/:userId/status', async (req, res) => {
         console.log('🔄 Syncing status to Auth0');
         console.log('is_active:', updatedUser.is_active);
         console.log('blocked in Auth0:', !updatedUser.is_active);
+        console.log('new role:', updatedUser.role);
 
         await updateAuth0User(targetUser.auth0_id, {
           is_active: updatedUser.is_active,
-          role: targetUser.role, // Include current role to not overwrite it
-          is_admin: targetUser.is_admin // Include current admin status
+          role: updatedUser.role,
+          is_admin: targetUser.is_admin
         });
         console.log('✅ Auth0 status sync completed');
       } catch (auth0Error) {
@@ -890,12 +1216,15 @@ router.patch('/users/:userId/status', async (req, res) => {
     await logAdminAction(adminUserId, 'UPDATE_USER_STATUS', userId, {
       is_active: !!is_active,
       previous_status: targetUser.current_active,
-      new_status: updatedUser.is_active
+      new_status: updatedUser.is_active,
+      role_adjustment: roleAdjustment,
+      membership_synced: true
     }, req);
 
     res.json({
       user: updatedUser,
-      auth0_synced: !!targetUser.auth0_id
+      auth0_synced: !!targetUser.auth0_id,
+      role_adjusted: roleAdjustment
     });
   } catch (error) {
     console.error('Update user status error:', error);
@@ -1183,6 +1512,7 @@ router.delete('/products/:id', async (req, res) => {
   }
 });
 
+// Keep your audit-logs route that was in your original version
 router.get('/audit-logs', async (req, res) => {
   try {
     const adminUserId = req.adminUser.id;

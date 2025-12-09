@@ -11,7 +11,6 @@ const { checkJwt } = require('../middleware/admin-check');
 const membershipRoutes = require("./memberships");
 const getActiveMembershipForUser = membershipRoutes.getActiveMembershipForUser;
 
-
 /**
  * Get complete user profile from Auth0 userinfo endpoint
  * This ensures we get the full profile including email, name, etc.
@@ -171,7 +170,7 @@ router.get('/me', checkJwt, async (req, res) => {
     });
 
     const user = await upsertUserFromAuth0(completeProfile);
-    
+
     console.log("🔐 Logged-in user:", user);
     const membership = await getActiveMembershipForUser(user.id);
 
@@ -184,10 +183,10 @@ router.get('/me', checkJwt, async (req, res) => {
       console.log("🔗 Normalized email for linking:", normalizedEmail);
 
       const linkRes = await pool.query(
-        `UPDATE appointments
+          `UPDATE appointments
         SET user_id = $1, updated_at = NOW()
         WHERE LOWER(TRIM(email)) = $2 AND user_id IS NULL`,
-        [user.id, normalizedEmail]
+          [user.id, normalizedEmail]
       );
 
       console.log(`🔗 Linked ${linkRes.rowCount} appointments to user ${user.email}`);
@@ -210,7 +209,7 @@ router.get('/me', checkJwt, async (req, res) => {
         created_at: user.created_at,
         updated_at: user.updated_at,
         auth_provider: user.auth_provider,
-        membership 
+        membership
       }
     });
   } catch (err) {

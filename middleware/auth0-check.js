@@ -26,7 +26,6 @@ const getTokenFromCookie = (req) => {
   return null;
 };
 
-
 const checkJwt = jwt({
   secret: jwksRsa.expressJwtSecret({
     cache: true,

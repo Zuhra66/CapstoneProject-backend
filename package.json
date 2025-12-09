@@ -1,14 +1,16 @@
 {
   "name": "capstoneproject-backend",
   "version": "1.0.0",
-  "description": "",
+  "description": "Backend with Google APIs and SendGrid integration",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js"
   },
+  "license": "ISC",
   "dependencies": {
     "@notionhq/client": "^2.2.5",
+    "@sendgrid/mail": "^8.1.6",
     "axios": "^1.13.2",
     "bcryptjs": "^3.0.2",
     "cookie-parser": "^1.4.7",
@@ -29,17 +31,6 @@
     "passport-google-oauth20": "^2.0.0",
     "pg": "^8.16.3"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Zuhra66/CapstoneProject-backend.git"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/Zuhra66/CapstoneProject-backend/issues"
-  },
-  "homepage": "https://github.com/Zuhra66/CapstoneProject-backend#readme",
   "devDependencies": {
     "nodemon": "^3.1.10"
   }
