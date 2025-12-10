@@ -21,7 +21,9 @@ const eventsRoutes = require('./routes/events');
 const calendarRoutes = require('./routes/calendar');
 const membershipRoutes = require('./routes/memberships');
 const newsletterRoutes = require('./routes/newsletter');
-const auditLogsRoutes = require('./routes/auditLogs');  // NEW: Audit logs routes
+const auditLogsRoutes = require('./routes/auditLogs');
+
+
 
 // Import audit middleware
 const auditMiddleware = require('./middleware/auditMiddleware');  // NEW: Audit middleware
@@ -205,6 +207,7 @@ app.use(auditMiddleware);
 
 /* ---------- API routes ---------- */
 app.use('/api/newsletter', newsletterRoutes);
+app.use('/api/blog', blogRoutes);
 app.use('/internal', syncRoutes);
 app.use('/auth', authRoutes);
 app.use('/calendar', calendarRoutes);
