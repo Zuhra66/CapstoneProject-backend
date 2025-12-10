@@ -1,17 +1,27 @@
-// routes/auth.js
+// routes/auth.js - Production-ready version
 const express = require('express');
 const router = express.Router();
-
+const axios = require('axios');
 const { pool } = require('../db');
+
+// Import the SAME JWT middleware from admin-check
 const { checkJwt } = require('../middleware/admin-check');
 
-// Simple ping for debugging (optional)
-router.get('/ping', (req, res) => {
-  res.json({ ok: true });
-});
 // Membership
 const membershipRoutes = require("./memberships");
 const getActiveMembershipForUser = membershipRoutes.getActiveMembershipForUser;
+
+// --- ADDED FROM SECOND FILE ---
+// Simple ping for debugging
+router.get('/ping', (req, res) => {
+  res.json({ ok: true });
+});
+
+// Handle preflight for CORS
+router.options('/me', (req, res) => {
+  res.sendStatus(200);
+});
+// --- END ADDITIONS ---
 
 /**
  * Get complete user profile from Auth0 userinfo endpoint
@@ -131,80 +141,46 @@ async function upsertUserFromAuth0(profile) {
   }
 }
 
-// Handle preflight so browser doesn't get blocked
-router.options('/me', (req, res) => {
-  res.sendStatus(200);
-});
+/* ----------------- routes ------------------ */
 
-// GET /api/auth/me
+// GET /auth/me - Get current user info using Bearer token
 router.get('/me', checkJwt, async (req, res) => {
   try {
-    // req.auth comes from express-oauth2-jwt-bearer via our checkJwt
-    const payload = req.auth?.payload || req.auth || {};
-    const sub = payload.sub;
-    const email = payload.email;
+    console.log('🔐 /auth/me called');
 
-    console.log('🔐 /api/auth/me DEBUG ==========');
-    console.log('Token sub:', sub);
-    console.log('Token email:', email);
-
-    if (!sub) {
-      return res.status(401).json({ error: 'Missing sub in token' });
+    // Check if token is present and valid
+    if (!req.auth || !req.auth.sub) {
+      console.log('❌ No valid JWT token found');
+      return res.status(200).json({ user: null, error: 'No valid authentication token' });
     }
 
-    // Look up user by auth0_id or auth_sub
-    const q = `
-      SELECT
-        id,
-        auth0_id,
-        auth_sub,
-        email,
-        first_name,
-        last_name,
-        name,
-        role,
-        is_admin,
-        is_active,
-        auth_provider,
-        created_at,
-        updated_at
-      FROM public.users
-      WHERE auth0_id = $1 OR auth_sub = $1
-      LIMIT 1
-    `;
-    const result = await pool.query(q, [sub]);
-
-    if (result.rows.length === 0) {
-      console.log('❌ /api/auth/me: user not found for sub', sub);
-      return res.status(404).json({ error: 'User not found' });
+    const accessToken = getAccessTokenFromHeader(req);
+    if (!accessToken) {
+      console.log('❌ No access token found in header');
+      return res.status(401).json({ user: null, error: 'No access token provided' });
     }
 
-    const dbUser = result.rows[0];
-
-    console.log('✅ /api/auth/me: user found:', {
-      id: dbUser.id,
-      email: dbUser.email,
-      role: dbUser.role,
-      is_admin: dbUser.is_admin,
-      is_active: dbUser.is_active,
+    console.log('👤 Auth0 JWT payload (basic):', {
+      sub: req.auth.sub,
+      email: req.auth.email
     });
 
-    res.json({
-      user: {
-        id: dbUser.id,
-        auth0_id: dbUser.auth0_id,
-        auth_sub: dbUser.auth_sub,
-        email: dbUser.email,
-        first_name: dbUser.first_name,
-        last_name: dbUser.last_name,
-        name: dbUser.name,
-        role: dbUser.role,
-        is_admin: dbUser.is_admin,
-        is_active: dbUser.is_active,
-        auth_provider: dbUser.auth_provider,
-        createdAt: dbUser.created_at,
-        updatedAt: dbUser.updated_at,
-      },
+    // Get complete user profile from Auth0 userinfo endpoint
+    const completeProfile = await getCompleteUserProfile(accessToken);
+
+    if (!completeProfile.sub) {
+      console.log('❌ No user sub in complete profile');
+      return res.status(401).json({ user: null, error: 'Invalid user profile' });
+    }
+
+    console.log('👤 Complete user profile:', {
+      sub: completeProfile.sub,
+      email: completeProfile.email,
+      name: completeProfile.name,
+      given_name: completeProfile.given_name,
+      family_name: completeProfile.family_name
+    });
+
     const user = await upsertUserFromAuth0(completeProfile);
 
     console.log("🔐 Logged-in user:", user);
@@ -249,9 +225,29 @@ router.get('/me', checkJwt, async (req, res) => {
       }
     });
   } catch (err) {
-    console.error('Error in /api/auth/me:', err);
-    res.status(500).json({ error: 'Failed to load auth user' });
+    console.error('❌ /me error:', err.message);
+    console.error('❌ Full error details:', err);
+
+    if (err.name === 'UnauthorizedError') {
+      return res.status(401).json({
+        user: null,
+        error: 'Invalid or expired token'
+      });
+    }
+
+    res.status(500).json({
+      user: null,
+      error: 'Server error: ' + err.message
+    });
   }
+});
+
+// POST /auth/logout
+router.post('/logout', (req, res) => {
+  console.log('🚪 Clearing auth cookies');
+  res.clearCookie('refresh_token');
+  res.clearCookie('access_token');
+  res.json({ message: 'Logged out successfully' });
 });
 
 module.exports = router;

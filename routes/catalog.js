@@ -1,4 +1,4 @@
-// routes/catalog.js
+// routes/catalog.js - CORRECT SINGLE VERSION
 const express = require('express');
 const router = express.Router();
 
@@ -24,16 +24,10 @@ function normalizeLike(s) {
  * CATEGORIES
  *  GET /api/categories
  * ------------------------------------------------------------------ */
-router.get('/categories', async (req, res) => {
-const express = require('express');
-const router = express.Router();
-const { pool } = require('../db');
-
-// GET /api/categories
 router.get('/categories', async (_req, res) => {
   try {
     const { rows } = await dbPool.query(
-      `
+        `
         SELECT id, name, slug, description
         FROM public.categories
         ORDER BY name ASC
@@ -70,7 +64,7 @@ router.get('/products', async (req, res) => {
       i++;
       params.push(like);
       where.push(
-        `(LOWER(p.name) LIKE $${i} OR EXISTS (
+          `(LOWER(p.name) LIKE $${i} OR EXISTS (
           SELECT 1
           FROM unnest(COALESCE(p.tags, '{}'::text[])) AS t
           WHERE LOWER(t) LIKE $${i}
@@ -83,7 +77,7 @@ router.get('/products', async (req, res) => {
       i++;
       params.push(category.toLowerCase());
       where.push(
-        `(LOWER(c.slug) = $${i} OR LOWER(c.name) = $${i})`,
+          `(LOWER(c.slug) = $${i} OR LOWER(c.name) = $${i})`,
       );
     }
 
@@ -146,7 +140,7 @@ router.get('/education', async (req, res) => {
       ia++;
       articleParams.push(like);
       articleWhere.push(
-        `(LOWER(ea.title) LIKE $${ia} OR LOWER(ea.summary) LIKE $${ia})`,
+          `(LOWER(ea.title) LIKE $${ia} OR LOWER(ea.summary) LIKE $${ia})`,
       );
     }
 
@@ -179,7 +173,7 @@ router.get('/education', async (req, res) => {
       iv++;
       videoParams.push(like);
       videoWhere.push(
-        `(LOWER(ev.title) LIKE $${iv})`,
+          `(LOWER(ev.title) LIKE $${iv})`,
       );
     }
 

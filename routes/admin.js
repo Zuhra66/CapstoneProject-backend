@@ -1,4 +1,4 @@
-// routes/admin.js
+// routes/admin.js - PRODUCTION-READY MERGED VERSION
 const express = require('express');
 const router = express.Router();
 
@@ -42,14 +42,55 @@ function makeSlug(s) {
   .replace(/[^a-z0-9-]/g, '');
 }
 
+function normalizeDate(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 // Ensure product slug is unique by appending -2, -3, ... if needed
 async function ensureUniqueProductSlug(baseSlug) {
   const { rows } = await dbPool.query(
       `
-      SELECT slug
-      FROM public.products
-      WHERE slug = $1 OR slug LIKE $2
-    `,
+    SELECT slug
+    FROM public.products
+    WHERE slug = $1 OR slug LIKE $2
+  `,
+      [baseSlug, `${baseSlug}-%`],
+  );
+
+  if (!rows.length) {
+    return baseSlug;
+  }
+
+  let maxSuffix = 1;
+  const suffixRegex = new RegExp(`^${baseSlug}-(\\d+)$`);
+
+  for (const row of rows) {
+    if (row.slug === baseSlug) {
+      if (maxSuffix < 2) maxSuffix = 2;
+    } else {
+      const match = row.slug.match(suffixRegex);
+      if (match) {
+        const n = parseInt(match[1], 10);
+        if (!Number.isNaN(n) && n + 1 > maxSuffix) {
+          maxSuffix = n + 1;
+        }
+      }
+    }
+  }
+
+  return `${baseSlug}-${maxSuffix}`;
+}
+
+// Ensure education article slug is unique
+async function ensureUniqueEducationArticleSlug(baseSlug) {
+  const { rows } = await dbPool.query(
+      `
+    SELECT slug
+    FROM public.education_articles
+    WHERE slug = $1 OR slug LIKE $2
+  `,
       [baseSlug, `${baseSlug}-%`],
   );
 
@@ -359,7 +400,7 @@ fs.mkdirSync(uploadEventsDir, { recursive: true });
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadEventsDir),
   filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname); // .jpg, .png, .pdf
+    const ext = path.extname(file.originalname);
     const base = path
     .basename(file.originalname, ext)
     .replace(/\s+/g, '-')
@@ -410,15 +451,13 @@ const logAdminAction = async (
 };
 
 // ----------------------
-// Debug user route
+// Membership sync helper
 // ----------------------
-// ADDED: Handle membership when role changes or user becomes inactive
 const syncMembershipWithRole = async (userId, newRole, isActive) => {
   try {
     console.log('🔄 Syncing membership with role for user:', userId);
     console.log('🔧 New role:', newRole, 'Is active:', isActive);
 
-    // Get current membership status
     const membershipResult = await dbPool.query(
         `SELECT um.status, um.id FROM user_memberships um WHERE um.user_id = $1`,
         [userId]
@@ -471,129 +510,13 @@ const syncMembershipWithRole = async (userId, newRole, isActive) => {
   }
 };
 
-// Enhanced debug route
-router.get('/debug-user/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-
-    const userResult = await dbPool.query(
-        'SELECT id, auth0_id, email, first_name, last_name, name, is_active, role, is_admin FROM public.users WHERE id = $1',
-        [userId],
-    );
-
-    if (userResult.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    const user = userResult.rows[0];
-
-    let auth0Test = { success: false, message: '' };
-    let auth0UserData = null;
-    let auth0RolesData = null;
-    let allAuth0Roles = null;
-
-    if (user.auth0_id) {
-      try {
-        const token = await getManagementApiToken();
-        const apiDomain = process.env.AUTH0_CUSTOM_DOMAIN || process.env.AUTH0_DOMAIN;
-
-        const allRolesResponse = await fetch(
-            `https://${apiDomain}/api/v2/roles`,
-            {
-              headers: {
-                Authorization: `Bearer ${token}`,
-                Accept: 'application/json',
-              },
-            },
-        );
-
-        if (allRolesResponse.ok) {
-          allAuth0Roles = await allRolesResponse.json();
-        }
-
-        const userResponse = await fetch(
-            `https://${apiDomain}/api/v2/users/${encodeURIComponent(
-                user.auth0_id,
-            )}`,
-            {
-              headers: {
-                Authorization: `Bearer ${token}`,
-                Accept: 'application/json',
-              },
-            },
-        );
-
-        if (userResponse.ok) {
-          auth0UserData = await userResponse.json();
-
-          const rolesResponse = await fetch(
-              `https://${apiDomain}/api/v2/users/${encodeURIComponent(
-                  user.auth0_id,
-              )}/roles`,
-              {
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                  Accept: 'application/json',
-                },
-              },
-          );
-
-          if (rolesResponse.ok) {
-            auth0RolesData = await rolesResponse.json();
-          }
-
-          auth0Test = { success: true, message: 'Auth0 Management API is working' };
-        } else {
-          const errorData = await userResponse.json().catch(() => ({}));
-          auth0Test = {
-            success: false,
-            message: `Auth0 API error: ${userResponse.status} - ${
-                errorData.message || errorData.error || userResponse.statusText
-            }`,
-          };
-        }
-      } catch (error) {
-        auth0Test = { success: false, message: `Auth0 test failed: ${error.message}` };
-      }
-    }
-
-    res.json({
-      user: {
-        id: user.id,
-        email: user.email,
-        auth0_id: user.auth0_id,
-        has_auth0_id: !!user.auth0_id,
-        is_active: user.is_active,
-        role: user.role,
-        is_admin: user.is_admin,
-      },
-      auth0_test: auth0Test,
-      auth0_user_data: auth0UserData,
-      auth0_roles: auth0RolesData,
-      available_auth0_roles: allAuth0Roles
-          ? allAuth0Roles.map((r) => ({
-            id: r.id,
-            name: r.name,
-            description: r.description,
-          }))
-          : null,
-      environment: {
-        has_domain: !!process.env.AUTH0_DOMAIN,
-        has_custom_domain: !!process.env.AUTH0_CUSTOM_DOMAIN,
-        has_client_id: !!process.env.AUTH0_MANAGEMENT_CLIENT_ID,
-        has_client_secret: !!process.env.AUTH0_MANAGEMENT_CLIENT_SECRET,
-        has_audience: !!process.env.AUTH0_MANAGEMENT_AUDIENCE,
-      },
-    });
-  } catch (error) {
-    console.error('Debug error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // ============================================
-// UPDATED DASHBOARD-STATS ROUTE WITH ALL STATS
+// ROUTES
 // ============================================
+
+// ----------------------
+// Dashboard Stats (ENHANCED)
+// ----------------------
 router.get('/dashboard-stats', async (req, res) => {
   try {
     const adminUserId = req.adminUser.id;
@@ -806,6 +729,7 @@ router.get('/dashboard-stats', async (req, res) => {
   } catch (error) {
     console.error('❌ Dashboard stats error:', error);
 
+    // Simple fallback stats
     const fallbackStats = {
       users: {
         total: 1,
@@ -816,24 +740,6 @@ router.get('/dashboard-stats', async (req, res) => {
         total: 0,
         active: 0
       },
-      appointments: {
-        total: 0,
-        pending: 0,
-        today: 0
-      },
-      products: { total: 0 },
-      categories: { total: 0 },
-      blog: { total: 0 },
-      education: {
-        videos: 0,
-        articles: 0
-      },
-      events: { upcoming: 0 },
-      memberships: {
-        plans: 0,
-        active: 0
-      },
-      messages: { total: 0 },
       audit: {
         total: 0,
         today: 0,
@@ -841,105 +747,155 @@ router.get('/dashboard-stats', async (req, res) => {
         authentication: 0,
         access: 0,
         modification: 0
-      }
+      },
+      appointments: {
+        total: 0,
+        pending: 0,
+        today: 0
+      },
+      products: {
+        total: 0,
+        categories: 0
+      },
+      content: {
+        blogPosts: 0,
+        upcomingEvents: 0
+      },
+      membership: {
+        plans: 0,
+        active: 0
+      },
+      adminLogs: 0
     };
 
-    // Try to get additional stats if tables exist
-    try {
-      // Appointments stats
-      const appointmentsTotal = await dbPool.query('SELECT COUNT(*) FROM appointments');
-      const appointmentsPending = await dbPool.query("SELECT COUNT(*) FROM appointments WHERE status = 'pending'");
-      const appointmentsToday = await dbPool.query(`
-        SELECT COUNT(*) FROM appointments 
-        WHERE DATE(appointment_date) = CURRENT_DATE
-      `);
-      stats.appointments = {
-        total: parseInt(appointmentsTotal.rows[0].count) || 0,
-        pending: parseInt(appointmentsPending.rows[0].count) || 0,
-        today: parseInt(appointmentsToday.rows[0].count) || 0
-      };
-    } catch (e) {
-      console.log('Appointments stats not available:', e.message);
-    }
-
-    try {
-      // Products stats
-      const productsTotal = await dbPool.query('SELECT COUNT(*) FROM products');
-      stats.products.total = parseInt(productsTotal.rows[0].count) || 0;
-    } catch (e) {
-      console.log('Products stats not available:', e.message);
-    }
-
-    try {
-      // Blog stats
-      const blogTotal = await dbPool.query('SELECT COUNT(*) FROM blog_posts');
-      stats.blog.total = parseInt(blogTotal.rows[0].count) || 0;
-    } catch (e) {
-      console.log('Blog stats not available:', e.message);
-    }
-
-    try {
-      // Education stats
-      const educationVideos = await dbPool.query('SELECT COUNT(*) FROM education_videos');
-      const educationArticles = await dbPool.query('SELECT COUNT(*) FROM education_articles');
-      stats.education = {
-        videos: parseInt(educationVideos.rows[0].count) || 0,
-        articles: parseInt(educationArticles.rows[0].count) || 0
-      };
-    } catch (e) {
-      console.log('Education stats not available:', e.message);
-    }
-
-    try {
-      // Categories stats
-      const categoriesTotal = await dbPool.query('SELECT COUNT(*) FROM categories');
-      stats.categories.total = parseInt(categoriesTotal.rows[0].count) || 0;
-    } catch (e) {
-      console.log('Categories stats not available:', e.message);
-    }
-
-    try {
-      // Events stats (upcoming)
-      const upcomingEvents = await dbPool.query(`
-        SELECT COUNT(*) FROM events 
-        WHERE event_date >= CURRENT_DATE
-      `);
-      stats.events.upcoming = parseInt(upcomingEvents.rows[0].count) || 0;
-    } catch (e) {
-      console.log('Events stats not available:', e.message);
-    }
-
-    try {
-      // Memberships stats
-      const membershipPlans = await dbPool.query('SELECT COUNT(*) FROM membership_plans');
-      const activeMemberships = await dbPool.query("SELECT COUNT(*) FROM user_memberships WHERE status = 'active'");
-      stats.memberships = {
-        plans: parseInt(membershipPlans.rows[0].count) || 0,
-        active: parseInt(activeMemberships.rows[0].count) || 0
-      };
-    } catch (e) {
-      console.log('Memberships stats not available:', e.message);
-    }
-
-    try {
-      // Messages stats
-      const messagesTotal = await dbPool.query('SELECT COUNT(*) FROM contact_messages');
-      stats.messages.total = parseInt(messagesTotal.rows[0].count) || 0;
-    } catch (e) {
-      console.log('Messages stats not available:', e.message);
-    }
-
-    await logAdminAction(req.adminUser.id, 'VIEW_DASHBOARD_STATS', null, {}, req);
-
-    console.log('📊 Dashboard stats generated successfully');
-    res.json(stats);
-
+    res.json(fallbackStats);
   }
 });
 
 // ----------------------
-// Educational Hub admin root
-// Base path: /api/admin/education
+// Debug User Route
+// ----------------------
+router.get('/debug-user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const userResult = await dbPool.query(
+        'SELECT id, auth0_id, email, first_name, last_name, name, is_active, role, is_admin FROM public.users WHERE id = $1',
+        [userId],
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const user = userResult.rows[0];
+
+    let auth0Test = { success: false, message: '' };
+    let auth0UserData = null;
+    let auth0RolesData = null;
+    let allAuth0Roles = null;
+
+    if (user.auth0_id) {
+      try {
+        const token = await getManagementApiToken();
+        const apiDomain = process.env.AUTH0_CUSTOM_DOMAIN || process.env.AUTH0_DOMAIN;
+
+        const allRolesResponse = await fetch(
+            `https://${apiDomain}/api/v2/roles`,
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: 'application/json',
+              },
+            },
+        );
+
+        if (allRolesResponse.ok) {
+          allAuth0Roles = await allRolesResponse.json();
+        }
+
+        const userResponse = await fetch(
+            `https://${apiDomain}/api/v2/users/${encodeURIComponent(
+                user.auth0_id,
+            )}`,
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: 'application/json',
+              },
+            },
+        );
+
+        if (userResponse.ok) {
+          auth0UserData = await userResponse.json();
+
+          const rolesResponse = await fetch(
+              `https://${apiDomain}/api/v2/users/${encodeURIComponent(
+                  user.auth0_id,
+              )}/roles`,
+              {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  Accept: 'application/json',
+                },
+              },
+          );
+
+          if (rolesResponse.ok) {
+            auth0RolesData = await rolesResponse.json();
+          }
+
+          auth0Test = { success: true, message: 'Auth0 Management API is working' };
+        } else {
+          const errorData = await userResponse.json().catch(() => ({}));
+          auth0Test = {
+            success: false,
+            message: `Auth0 API error: ${userResponse.status} - ${
+                errorData.message || errorData.error || userResponse.statusText
+            }`,
+          };
+        }
+      } catch (error) {
+        auth0Test = { success: false, message: `Auth0 test failed: ${error.message}` };
+      }
+    }
+
+    res.json({
+      user: {
+        id: user.id,
+        email: user.email,
+        auth0_id: user.auth0_id,
+        has_auth0_id: !!user.auth0_id,
+        is_active: user.is_active,
+        role: user.role,
+        is_admin: user.is_admin,
+      },
+      auth0_test: auth0Test,
+      auth0_user_data: auth0UserData,
+      auth0_roles: auth0RolesData,
+      available_auth0_roles: allAuth0Roles
+          ? allAuth0Roles.map((r) => ({
+            id: r.id,
+            name: r.name,
+            description: r.description,
+          }))
+          : null,
+      environment: {
+        has_domain: !!process.env.AUTH0_DOMAIN,
+        has_custom_domain: !!process.env.AUTH0_CUSTOM_DOMAIN,
+        has_client_id: !!process.env.AUTH0_MANAGEMENT_CLIENT_ID,
+        has_client_secret: !!process.env.AUTH0_MANAGEMENT_CLIENT_SECRET,
+        has_audience: !!process.env.AUTH0_MANAGEMENT_AUDIENCE,
+      },
+    });
+  } catch (error) {
+    console.error('Debug error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ----------------------
+// Educational Hub admin
 // ----------------------
 router.get('/education', async (req, res) => {
   try {
@@ -1009,43 +965,8 @@ router.get('/education', async (req, res) => {
   }
 });
 
-// Ensure education article slug is unique by appending -2, -3, ... if needed
-async function ensureUniqueEducationArticleSlug(baseSlug) {
-  const { rows } = await dbPool.query(
-      `
-      SELECT slug
-      FROM public.education_articles
-      WHERE slug = $1 OR slug LIKE $2
-    `,
-      [baseSlug, `${baseSlug}-%`],
-  );
-
-  if (!rows.length) {
-    return baseSlug;
-  }
-
-  let maxSuffix = 1;
-  const suffixRegex = new RegExp(`^${baseSlug}-(\\d+)$`);
-
-  for (const row of rows) {
-    if (row.slug === baseSlug) {
-      if (maxSuffix < 2) maxSuffix = 2;
-    } else {
-      const match = row.slug.match(suffixRegex);
-      if (match) {
-        const n = parseInt(match[1], 10);
-        if (!Number.isNaN(n) && n + 1 > maxSuffix) {
-          maxSuffix = n + 1;
-        }
-      }
-    }
-  }
-
-  return `${baseSlug}-${maxSuffix}`;
-}
-
 // ----------------------
-// Users
+// Users Management (ENHANCED with membership sync)
 // ----------------------
 router.get('/users', async (req, res) => {
   try {
@@ -1156,18 +1077,18 @@ router.get('/users/:userId', async (req, res) => {
 
     const userResult = await dbPool.query(
         `SELECT
-         u.id, u.auth0_id, u.email, u.first_name, u.last_name, u.name, u.role,
-         u.is_active, u.is_admin, u.auth_provider, u.created_at, u.updated_at,
-         um.id as membership_id, um.plan_id, um.status as membership_status,
-         um.start_date, um.end_date, mp.name as plan_name,
-         COUNT(a.id) as appointment_count
-       FROM public.users u
-       LEFT JOIN public.user_memberships um
-         ON u.id = um.user_id AND um.status = 'active'
-       LEFT JOIN public.membership_plans mp ON um.plan_id = mp.id
-       LEFT JOIN public.appointments a ON u.id = a.user_id
-       WHERE u.id = $1
-       GROUP BY u.id, um.id, mp.name`,
+       u.id, u.auth0_id, u.email, u.first_name, u.last_name, u.name, u.role,
+       u.is_active, u.is_admin, u.auth_provider, u.created_at, u.updated_at,
+       um.id as membership_id, um.plan_id, um.status as membership_status,
+       um.start_date, um.end_date, mp.name as plan_name,
+       COUNT(a.id) as appointment_count
+     FROM public.users u
+     LEFT JOIN public.user_memberships um
+       ON u.id = um.user_id AND um.status = 'active'
+     LEFT JOIN public.membership_plans mp ON um.plan_id = mp.id
+     LEFT JOIN public.appointments a ON u.id = a.user_id
+     WHERE u.id = $1
+     GROUP BY u.id, um.id, mp.name`,
         [userId],
     );
 
@@ -1177,10 +1098,10 @@ router.get('/users/:userId', async (req, res) => {
 
     const appointmentsResult = await dbPool.query(
         `SELECT id, service_type, appointment_date, status, created_at
-       FROM public.appointments
-       WHERE user_id = $1
-       ORDER BY appointment_date DESC
-       LIMIT 10`,
+     FROM public.appointments
+     WHERE user_id = $1
+     ORDER BY appointment_date DESC
+     LIMIT 10`,
         [userId],
     );
 
@@ -1276,10 +1197,6 @@ router.put('/users/:userId', async (req, res) => {
       last_name || null,
       name || null,
       email,
-      role || 'Member',
-      is_active !== undefined ? is_active : true,
-      is_admin !== undefined ? is_admin : false,
-      userId,
       finalRole,
       finalIsActive,
       is_admin !== undefined ? is_admin : targetUser.is_admin,
@@ -1320,22 +1237,16 @@ router.put('/users/:userId', async (req, res) => {
           last_name,
           name,
           email,
-          role,
-          is_active,
+          role: finalRole,
+          is_active: finalIsActive,
           is_admin,
           auth0_sync: !!auth0SyncResult,
           auth0_role_sync: !!auth0RoleSyncResult,
           auth0_id: targetUser.auth0_id,
+          membership_synced: true
         },
         req,
     );
-    await logAdminAction(adminUserId, 'UPDATE_USER', userId, {
-      first_name, last_name, name, email, role: finalRole, is_active: finalIsActive, is_admin,
-      auth0_sync: !!auth0SyncResult,
-      auth0_role_sync: !!auth0RoleSyncResult,
-      auth0_id: targetUser.auth0_id,
-      membership_synced: true
-    }, req);
 
     res.json({
       message:
@@ -1421,14 +1332,10 @@ router.patch('/users/:userId/role', async (req, res) => {
         await updateAuth0User(targetUser.auth0_id, {
           role: updatedUser.role,
           is_active: targetUser.is_active,
-          is_admin: updatedUser.is_admin,
           is_admin: targetUser.is_admin
         });
       } catch (auth0Error) {
-        console.error(
-            '⚠️ Auth0 sync failed for role update:',
-            auth0Error.message,
-        );
+        console.error('⚠️ Auth0 sync failed for role update:', auth0Error.message);
       }
     }
 
@@ -1436,15 +1343,14 @@ router.patch('/users/:userId/role', async (req, res) => {
         adminUserId,
         'UPDATE_USER_ROLE',
         userId,
-        { role, previous_role: targetUser.role, new_role: updatedUser.role },
+        {
+          role,
+          previous_role: targetUser.role,
+          new_role: updatedUser.role,
+          membership_synced: true
+        },
         req,
     );
-    await logAdminAction(adminUserId, 'UPDATE_USER_ROLE', userId, {
-      role,
-      previous_role: targetUser.role,
-      new_role: updatedUser.role,
-      membership_synced: true
-    }, req);
 
     res.json({
       user: updatedUser,
@@ -1502,11 +1408,6 @@ router.patch('/users/:userId/status', async (req, res) => {
     await syncMembershipWithRole(userId, finalRole, is_active);
 
     const result = await dbPool.query(
-        'UPDATE public.users SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
-        [!!is_active, userId],
-    );
-
-    const updatedUser = result.rows[0];
         'UPDATE public.users SET is_active = $1, role = $2, updated_at = NOW() WHERE id = $3 RETURNING *',
         [!!is_active, finalRole, userId]
     );
@@ -1517,10 +1418,6 @@ router.patch('/users/:userId/status', async (req, res) => {
 
     if (targetUser.auth0_id) {
       try {
-        await updateAuth0User(targetUser.auth0_id, {
-          is_active: updatedUser.is_active,
-          role: targetUser.role,
-          is_admin: targetUser.is_admin,
         console.log('🔄 Syncing status to Auth0');
         console.log('is_active:', updatedUser.is_active);
         console.log('blocked in Auth0:', !updatedUser.is_active);
@@ -1532,10 +1429,7 @@ router.patch('/users/:userId/status', async (req, res) => {
           is_admin: targetUser.is_admin
         });
       } catch (auth0Error) {
-        console.error(
-            '⚠️ Auth0 sync failed for status update:',
-            auth0Error.message,
-        );
+        console.error('⚠️ Auth0 sync failed for status update:', auth0Error.message);
       }
     }
 
@@ -1547,16 +1441,11 @@ router.patch('/users/:userId/status', async (req, res) => {
           is_active: !!is_active,
           previous_status: targetUser.current_active,
           new_status: updatedUser.is_active,
+          role_adjustment: roleAdjustment,
+          membership_synced: true
         },
         req,
     );
-    await logAdminAction(adminUserId, 'UPDATE_USER_STATUS', userId, {
-      is_active: !!is_active,
-      previous_status: targetUser.current_active,
-      new_status: updatedUser.is_active,
-      role_adjustment: roleAdjustment,
-      membership_synced: true
-    }, req);
 
     res.json({
       user: updatedUser,
@@ -1619,7 +1508,7 @@ router.delete('/users/:userId', async (req, res) => {
 });
 
 // ----------------------
-// Appointments
+// Appointments Management
 // ----------------------
 router.get('/appointments', async (req, res) => {
   try {
@@ -2047,7 +1936,6 @@ router.delete('/products/:id', async (req, res) => {
 
 // ----------------------
 // Admin Events (CRUD)
-// Base path: /api/admin/events
 // ----------------------
 
 // 🔹 Admin events list (GET /api/admin/events)
@@ -2063,7 +1951,6 @@ router.get('/events', async (req, res) => {
       } else if (status === 'draft') {
         whereClause = 'WHERE is_published = FALSE';
       } else if (status === 'cancelled') {
-        // no cancelled flag yet; return empty set
         whereClause = 'WHERE FALSE';
       }
     }
@@ -2102,13 +1989,6 @@ router.get('/events', async (req, res) => {
     res.status(500).json({ error: 'Failed to load events.' });
   }
 });
-
-// Helper to normalize date strings
-function normalizeDate(value) {
-  if (!value) return null;
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
 
 // Create event (supports multipart/form-data + file)
 router.post('/events', upload.single('file'), async (req, res) => {
@@ -2604,54 +2484,6 @@ router.get('/audit-logs', async (req, res) => {
     ]);
 
     const totalLogs = parseInt(countResult.rows[0].count, 10);
-    const totalPages = Math.ceil(totalLogs / lim);
-
-    await logAdminAction(adminUserId, 'VIEW_AUDIT_LOGS', null, {}, req);
-
-    res.json({
-      logs: logsResult.rows,
-      pagination: {
-        currentPage: pageNum,
-        totalPages,
-        totalLogs,
-        hasNext: pageNum < totalPages,
-        hasPrev: pageNum > 1,
-      },
-    });
-  } catch (error) {
-    console.error('Get audit logs error:', error);
-    res.status(500).json({ error: 'Failed to fetch audit logs' });
-  }
-});
-
-// Keep your audit-logs route that was in your original version
-router.get('/audit-logs', async (req, res) => {
-  try {
-    const adminUserId = req.adminUser.id;
-    const { page = 1, limit = 20 } = req.query;
-    const pageNum = toInt(page, 1);
-    const lim = toInt(limit, 20);
-    const offset = (pageNum - 1) * lim;
-
-    const logsQuery = `
-      SELECT
-        al.*,
-        admin_u.email as admin_email,
-        target_u.email as target_email
-      FROM public.admin_audit_logs al
-      LEFT JOIN public.users admin_u ON al.admin_user_id = admin_u.id
-      LEFT JOIN public.users target_u ON al.target_user_id = target_u.id
-      ORDER BY al.created_at DESC
-      LIMIT $1 OFFSET $2
-    `;
-    const countQuery = 'SELECT COUNT(*) FROM public.admin_audit_logs';
-
-    const [logsResult, countResult] = await Promise.all([
-      dbPool.query(logsQuery, [lim, offset]),
-      dbPool.query(countQuery),
-    ]);
-
-    const totalLogs = parseInt(countResult.rows[0].count);
     const totalPages = Math.ceil(totalLogs / lim);
 
     await logAdminAction(adminUserId, 'VIEW_AUDIT_LOGS', null, {}, req);
