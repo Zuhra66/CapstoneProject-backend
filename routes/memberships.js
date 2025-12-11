@@ -42,17 +42,97 @@ async function activateMembership(userId, planId, provider, externalRef = null) 
   `;
 
   await pool.query(sql, [userId, planId, provider, externalRef]);
-}
 
+  // Automatically assign role = 'Member'
+  await pool.query(
+    `UPDATE users SET role = 'Member', updated_at = NOW()
+     WHERE id = $1`,
+    [userId]
+  );
+}
 
 async function cancelMembership(userId) {
   await pool.query(
     `UPDATE user_memberships
      SET status = 'cancelled', end_at = NOW(), updated_at = NOW()
-     WHERE user_id = $1;`,
+     WHERE user_id = $1`,
+    [userId]
+  );
+
+  // Revert role back to User
+  await pool.query(
+    `UPDATE users SET role = 'User', updated_at = NOW()
+     WHERE id = $1`,
     [userId]
   );
 }
+
+// =============================
+// CANCEL MEMBERSHIP (USER)
+// =============================
+router.post("/cancel", checkJwt, async (req, res) => {
+  console.log("🔥 [CANCEL] Hit /membership/cancel route");
+
+  try {
+    // 1. Validate JWT + extract Auth0 ID
+    if (!req.auth || !req.auth.sub) {
+      console.log("❌ [CANCEL] Missing req.auth.sub");
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const auth0Id = req.auth.sub;
+    console.log("🔑 [CANCEL] Auth0 ID:", auth0Id);
+
+    // 2. Lookup internal user ID
+    const userLookup = await pool.query(
+      "SELECT id FROM users WHERE auth0_id = $1 LIMIT 1",
+      [auth0Id]
+    );
+
+    console.log("🧪 [CANCEL] User lookup:", userLookup.rows);
+
+    if (!userLookup.rows.length) {
+      console.log("❌ [CANCEL] User not found in DB");
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const userId = userLookup.rows[0].id;
+    console.log("👤 [CANCEL] Internal userId =", userId);
+
+    // 3. Cancel membership + update role
+    console.log("🛑 [CANCEL] Updating membership + role...");
+
+    await pool.query(
+      `UPDATE user_memberships
+       SET status = 'cancelled', end_at = NOW(), updated_at = NOW()
+       WHERE user_id = $1`,
+      [userId]
+    );
+
+    const roleUpdate = await pool.query(
+      `UPDATE users
+       SET role = 'User', updated_at = NOW()
+       WHERE id = $1
+       RETURNING role`,
+      [userId]
+    );
+
+    console.log("🎭 [CANCEL] Role updated to:", roleUpdate.rows[0].role);
+
+    // 4. Success response
+    console.log("✅ [CANCEL] Membership cancelled successfully!");
+
+    return res.json({
+      success: true,
+      message: "Membership cancelled",
+    });
+
+  } catch (err) {
+    console.error("🔥 [CANCEL ERROR] Unexpected error:", err);
+    return res.status(500).json({ error: "Failed to cancel membership" });
+  }
+});
+
 
 async function markMembershipPastDue(userId) {
   await pool.query(
@@ -67,10 +147,17 @@ async function markMembershipFailed(userId) {
   await pool.query(
     `UPDATE user_memberships
      SET status = 'failed', updated_at = NOW()
-     WHERE user_id = $1;`,
+     WHERE user_id = $1`,
+    [userId]
+  );
+
+  await pool.query(
+    `UPDATE users SET role = 'User', updated_at = NOW()
+     WHERE id = $1`,
     [userId]
   );
 }
+
 
 // =============================
 // ROUTES
@@ -161,7 +248,7 @@ router.get("/test-event", async (req, res) => {
 
 // Admin update
 router.post("/admin/update", checkJwt, async (req, res) => {
-  const { userId, planId, event } = req.query;
+  const { userId, status } = req.body;
 
   try {
     await pool.query(
