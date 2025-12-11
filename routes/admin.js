@@ -1,5 +1,7 @@
+// routes/admin.js
 const express = require('express');
 const router = express.Router();
+
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
@@ -7,26 +9,31 @@ const multer = require('multer');
 const { pool: dbPool } = require('../db');
 const { checkJwt, attachAdminUser, requireAdmin } = require('../middleware/admin-check');
 
-// ---------- File upload config for events ----------
+// ---------- File upload config for events & education ----------
 
 // Root uploads folder: <project-root>/uploads
 const uploadsRoot = path.join(__dirname, '..', 'uploads');
+
 // Events subfolder: <project-root>/uploads/events
 const eventsUploadDir = path.join(uploadsRoot, 'events');
+// Education subfolder: <project-root>/uploads/education
+const educationUploadDir = path.join(uploadsRoot, 'education');
 
 // Ensure directories exist
 fs.mkdirSync(eventsUploadDir, { recursive: true });
+fs.mkdirSync(educationUploadDir, { recursive: true });
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, eventsUploadDir);
-  },
-  filename: (req, file, cb) => {
-    const safeName = file.originalname.replace(/[^\w.-]/g, '_');
-    const ts = Date.now();
-    cb(null, `${ts}-${safeName}`);
-  },
-});
+const makeDiskStorage = (destinationDir) =>
+  multer.diskStorage({
+    destination: (req, file, cb) => {
+      cb(null, destinationDir);
+    },
+    filename: (req, file, cb) => {
+      const safeName = file.originalname.replace(/[^\w.-]/g, '_');
+      const ts = Date.now();
+      cb(null, `${ts}-${safeName}`);
+    },
+  });
 
 // ✅ Allow images *and* PDFs
 function fileFilter(req, file, cb) {
@@ -51,12 +58,16 @@ function fileFilter(req, file, cb) {
   cb(null, true);
 }
 
-const upload = multer({
-  storage,
+const eventsUpload = multer({
+  storage: makeDiskStorage(eventsUploadDir),
   fileFilter,
-  limits: {
-    fileSize: 10 * 1024 * 1024, // 10 MB
-  },
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+});
+
+const educationUpload = multer({
+  storage: makeDiskStorage(educationUploadDir),
+  fileFilter,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
 });
 // ---------- end upload config ----------
 // -------------------------------------
@@ -80,6 +91,16 @@ function makeSlug(s) {
     .toLowerCase()
     .replace(/\s+/g, '-')
     .replace(/[^a-z0-9-]/g, '');
+}
+
+// helper for education tags: "tag1, tag2" -> ["tag1", "tag2"]
+function parseTags(tagsStr) {
+  if (!tagsStr) return [];
+  if (Array.isArray(tagsStr)) return tagsStr;
+  return String(tagsStr)
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
 }
 
 // ensure product slug is unique
@@ -883,6 +904,467 @@ router.get('/dashboard-stats', async (req, res) => {
   }
 });
 
+// -------------------------------------
+// EDUCATION ROUTES (Admin CRUD)
+// -------------------------------------
+
+// ---- Articles ----
+
+// GET /api/admin/education/articles
+router.get('/education/articles', async (req, res) => {
+  try {
+    const adminUserId = req.adminUser.id;
+
+    const { rows } = await dbPool.query(
+      `
+        SELECT
+          id,
+          title,
+          summary,
+          minutes,
+          COALESCE(tags, '{}') AS tags,
+          cover_url,
+          href,
+          is_active,
+          created_at
+        FROM public.education_articles
+        ORDER BY created_at DESC
+      `
+    );
+
+    await logAdminAction(
+      adminUserId,
+      'ADMIN_LIST_EDUCATION_ARTICLES',
+      null,
+      {},
+      req
+    );
+
+    res.json({ articles: rows });
+  } catch (err) {
+    console.error('Admin education articles list error:', err);
+    res.status(500).json({ error: 'Failed to load education articles.' });
+  }
+});
+
+// POST /api/admin/education/articles
+// POST /api/admin/education/articles
+router.post('/education/articles', educationUpload.single('file'), async (req, res) => {
+  try {
+    const adminUserId = req.adminUser.id;
+    const {
+      title,
+      summary,
+      minutes,
+      tags,
+      cover_url,
+      href,
+      is_active = true,
+    } = req.body;
+
+    if (!title || !title.trim()) {
+      return res.status(400).json({ error: 'Title is required' });
+    }
+
+    const tagsArray = parseTags(tags);
+    const minutesValue =
+      minutes === '' || minutes === null || minutes === undefined
+        ? null
+        : Number(minutes);
+
+    // ✅ If a file was uploaded, build URL like /uploads/education/filename
+    const uploadedUrl = req.file
+      ? `/uploads/education/${req.file.filename}`
+      : null;
+
+    const finalCoverUrl = uploadedUrl || (cover_url || '').trim() || null;
+
+    const { rows } = await dbPool.query(
+      `
+        INSERT INTO public.education_articles
+          (title, summary, minutes, tags, cover_url, href, is_active)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING
+          id,
+          title,
+          summary,
+          minutes,
+          COALESCE(tags, '{}') AS tags,
+          cover_url,
+          href,
+          is_active,
+          created_at
+      `,
+      [
+        title.trim(),
+        (summary || '').trim() || null,
+        Number.isFinite(minutesValue) ? minutesValue : null,
+        tagsArray,
+        finalCoverUrl,
+        (href || '').trim() || null,
+        !!is_active,
+      ]
+    );
+
+    const article = rows[0];
+
+    await logAdminAction(
+      adminUserId,
+      'ADMIN_CREATE_EDUCATION_ARTICLE',
+      article.id,
+      { title: article.title },
+      req
+    );
+
+    res.json(article);
+  } catch (err) {
+    console.error('Admin create education article error:', err);
+    res.status(500).json({ error: 'Failed to save article.' });
+  }
+});
+
+
+// PUT /api/admin/education/articles/:id
+// PUT /api/admin/education/articles/:id
+router.put('/education/articles/:id', educationUpload.single('file'), async (req, res) => {
+  try {
+    const adminUserId = req.adminUser.id;
+    const { id } = req.params;
+
+    const existing = await dbPool.query(
+      'SELECT * FROM public.education_articles WHERE id = $1',
+      [id]
+    );
+    if (!existing.rows.length) {
+      return res.status(404).json({ error: 'Article not found' });
+    }
+
+    const {
+      title,
+      summary,
+      minutes,
+      tags,
+      cover_url,
+      href,
+      is_active,
+    } = req.body;
+
+    const tagsArray = parseTags(tags);
+    const minutesValue =
+      minutes === '' || minutes === null || minutes === undefined
+        ? null
+        : Number(minutes);
+
+    // ✅ Handle possible new uploaded file
+    const uploadedUrl = req.file
+      ? `/uploads/education/${req.file.filename}`
+      : null;
+
+    const current = existing.rows[0];
+
+    let newCoverUrl = current.cover_url;
+    if (uploadedUrl !== null) {
+      // New file replaces whatever was there before
+      newCoverUrl = uploadedUrl;
+    } else if (cover_url !== undefined) {
+      // Explicitly set via body; empty string clears it
+      newCoverUrl = cover_url || null;
+    }
+
+    const { rows } = await dbPool.query(
+      `
+        UPDATE public.education_articles
+        SET
+          title      = $2,
+          summary    = $3,
+          minutes    = $4,
+          tags       = $5,
+          cover_url  = $6,
+          href       = $7,
+          is_active  = $8,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING
+          id,
+          title,
+          summary,
+          minutes,
+          COALESCE(tags, '{}') AS tags,
+          cover_url,
+          href,
+          is_active,
+          created_at,
+          updated_at
+      `,
+      [
+        id,
+        title || current.title,
+        summary !== undefined ? summary : current.summary,
+        Number.isFinite(minutesValue) ? minutesValue : current.minutes,
+        tagsArray.length ? tagsArray : current.tags || [],
+        newCoverUrl,
+        href !== undefined ? href : current.href,
+        typeof is_active === 'boolean' ? is_active : current.is_active,
+      ]
+    );
+
+    const article = rows[0];
+
+    await logAdminAction(
+      adminUserId,
+      'ADMIN_UPDATE_EDUCATION_ARTICLE',
+      article.id,
+      { title: article.title },
+      req
+    );
+
+    res.json(article);
+  } catch (err) {
+    console.error('Admin update education article error:', err);
+    res.status(500).json({ error: 'Failed to update article.' });
+  }
+});
+
+// DELETE /api/admin/education/articles/:id
+router.delete('/education/articles/:id', async (req, res) => {
+  try {
+    const adminUserId = req.adminUser.id;
+    const { id } = req.params;
+
+    const result = await dbPool.query(
+      'DELETE FROM public.education_articles WHERE id = $1 RETURNING id, title',
+      [id]
+    );
+
+    if (!result.rowCount) {
+      return res.status(404).json({ error: 'Article not found' });
+    }
+
+    const deleted = result.rows[0];
+
+    await logAdminAction(
+      adminUserId,
+      'ADMIN_DELETE_EDUCATION_ARTICLE',
+      deleted.id,
+      { title: deleted.title },
+      req
+    );
+
+    res.status(204).end();
+  } catch (err) {
+    console.error('Admin delete education article error:', err);
+    res.status(500).json({ error: 'Failed to delete article.' });
+  }
+});
+
+// ---- Videos ----
+
+// GET /api/admin/education/videos
+router.get('/education/videos', async (req, res) => {
+  try {
+    const adminUserId = req.adminUser.id;
+
+    const { rows } = await dbPool.query(
+      `
+        SELECT
+          id,
+          title,
+          duration,
+          COALESCE(tags, '{}') AS tags,
+          thumb_url,
+          href,
+          is_active,
+          created_at
+        FROM public.education_videos
+        ORDER BY created_at DESC
+      `
+    );
+
+    await logAdminAction(
+      adminUserId,
+      'ADMIN_LIST_EDUCATION_VIDEOS',
+      null,
+      {},
+      req
+    );
+
+    res.json({ videos: rows });
+  } catch (err) {
+    console.error('Admin education videos list error:', err);
+    res.status(500).json({ error: 'Failed to load education videos.' });
+  }
+});
+
+// POST /api/admin/education/videos
+router.post('/education/videos', async (req, res) => {
+  try {
+    const adminUserId = req.adminUser.id;
+    const {
+      title,
+      duration,
+      tags,
+      thumb_url,
+      href,
+      is_active = true,
+    } = req.body;
+
+    if (!title || !title.trim()) {
+      return res.status(400).json({ error: 'Title is required' });
+    }
+
+    const tagsArray = parseTags(tags);
+
+    const { rows } = await dbPool.query(
+      `
+        INSERT INTO public.education_videos
+          (title, duration, tags, thumb_url, href, is_active)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING
+          id,
+          title,
+          duration,
+          COALESCE(tags, '{}') AS tags,
+          thumb_url,
+          href,
+          is_active,
+          created_at
+      `,
+      [
+        title.trim(),
+        (duration || '').trim() || null,
+        tagsArray,
+        (thumb_url || '').trim() || null,
+        (href || '').trim() || null,
+        !!is_active,
+      ]
+    );
+
+    const video = rows[0];
+
+    await logAdminAction(
+      adminUserId,
+      'ADMIN_CREATE_EDUCATION_VIDEO',
+      video.id,
+      { title: video.title },
+      req
+    );
+
+    res.json(video);
+  } catch (err) {
+    console.error('Admin create education video error:', err);
+    res.status(500).json({ error: 'Failed to save video.' });
+  }
+});
+
+// PUT /api/admin/education/videos/:id
+router.put('/education/videos/:id', async (req, res) => {
+  try {
+    const adminUserId = req.adminUser.id;
+    const { id } = req.params;
+
+    const existing = await dbPool.query(
+      'SELECT * FROM public.education_videos WHERE id = $1',
+      [id]
+    );
+    if (!existing.rows.length) {
+      return res.status(404).json({ error: 'Video not found' });
+    }
+
+    const {
+      title,
+      duration,
+      tags,
+      thumb_url,
+      href,
+      is_active,
+    } = req.body;
+
+    const tagsArray = parseTags(tags);
+
+    const { rows } = await dbPool.query(
+      `
+        UPDATE public.education_videos
+        SET
+          title      = $2,
+          duration   = $3,
+          tags       = $4,
+          thumb_url  = $5,
+          href       = $6,
+          is_active  = $7,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING
+          id,
+          title,
+          duration,
+          COALESCE(tags, '{}') AS tags,
+          thumb_url,
+          href,
+          is_active,
+          created_at,
+          updated_at
+      `,
+      [
+        id,
+        title || existing.rows[0].title,
+        duration !== undefined ? duration : existing.rows[0].duration,
+        tagsArray.length ? tagsArray : existing.rows[0].tags || [],
+        thumb_url !== undefined ? thumb_url : existing.rows[0].thumb_url,
+        href !== undefined ? href : existing.rows[0].href,
+        typeof is_active === 'boolean'
+          ? is_active
+          : existing.rows[0].is_active,
+      ]
+    );
+
+    const video = rows[0];
+
+    await logAdminAction(
+      adminUserId,
+      'ADMIN_UPDATE_EDUCATION_VIDEO',
+      video.id,
+      { title: video.title },
+      req
+    );
+
+    res.json(video);
+  } catch (err) {
+    console.error('Admin update education video error:', err);
+    res.status(500).json({ error: 'Failed to update video.' });
+  }
+});
+
+// DELETE /api/admin/education/videos/:id
+router.delete('/education/videos/:id', async (req, res) => {
+  try {
+    const adminUserId = req.adminUser.id;
+    const { id } = req.params;
+
+    const result = await dbPool.query(
+      'DELETE FROM public.education_videos WHERE id = $1 RETURNING id, title',
+      [id]
+    );
+
+    if (!result.rowCount) {
+      return res.status(404).json({ error: 'Video not found' });
+    }
+
+    const deleted = result.rows[0];
+
+    await logAdminAction(
+      adminUserId,
+      'ADMIN_DELETE_EDUCATION_VIDEO',
+      deleted.id,
+      { title: deleted.title },
+      req
+    );
+
+    res.status(204).end();
+  } catch (err) {
+    console.error('Admin delete education video error:', err);
+    res.status(500).json({ error: 'Failed to delete video.' });
+  }
+});
 // -------------------------------------
 // USERS ROUTES
 // -------------------------------------
@@ -1893,7 +2375,7 @@ router.get('/events', async (req, res) => {
 });
 
 // create event (multipart/form-data + file)
-router.post('/events', upload.single('file'), async (req, res) => {
+router.post('/events', eventsUpload.single('file'), async (req, res) => {
   try {
     const adminUserId = req.adminUser?.id;
 
@@ -1979,7 +2461,7 @@ router.post('/events', upload.single('file'), async (req, res) => {
 });
 
 // update event (multipart/form-data + file)
-router.put('/events/:id', upload.single('file'), async (req, res) => {
+router.put('/events/:id', eventsUpload.single('file'), async (req, res) => {
   try {
     const adminUserId = req.adminUser?.id;
     const { id } = req.params;
