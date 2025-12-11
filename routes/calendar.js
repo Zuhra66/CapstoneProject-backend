@@ -25,7 +25,7 @@ const calendar = google.calendar({ version: "v3", auth: oauth2Client });
 // Booking template: adjust as you like (24h "HH:MM" format)
 const BOOKING_TIMES = ["08:00", "09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00"];
 
-// ----------------- GET AVAILABLE TIMES -----------------
+  // ----------------- GET AVAILABLE TIMES -----------------
 router.get("/availability", async (req, res) => {
   try {
     const { date } = req.query; // YYYY-MM-DD
@@ -50,9 +50,20 @@ router.get("/availability", async (req, res) => {
       return { start, end };
     });
 
+
     const freeSlots = BOOKING_TIMES.filter((slot) => {
       const [hour, minute] = slot.split(":");
-      const start = new Date(`${date}T${hour}:${minute}:00-08:00`);
+
+      // BEFORE (incorrect on Render):
+      // const start = new Date(`${date}T${hour}:${minute}:00`);
+
+      // AFTER (correct):
+      const start = new Date(
+        new Date(`${date}T${hour}:${minute}:00`).toLocaleString("en-US", {
+          timeZone: "America/Los_Angeles", // force PST/PDT interpretation
+        })
+      );
+
       const end = new Date(start.getTime() + 60 * 60 * 1000);
 
       return !busyTimes.some(
@@ -60,12 +71,20 @@ router.get("/availability", async (req, res) => {
       );
     });
 
+    // ⭐ FIX #2 — Format times in provider timezone (LA)
     const formatted = freeSlots.map((slot) => {
       const [hour, minute] = slot.split(":");
-      const d = new Date(`${date}T${hour}:${minute}:00-08:00`);
+
+      const d = new Date(
+        new Date(`${date}T${hour}:${minute}:00`).toLocaleString("en-US", {
+          timeZone: "America/Los_Angeles",
+        })
+      );
+
       return d.toLocaleTimeString("en-US", {
         hour: "2-digit",
         minute: "2-digit",
+        timeZone: "America/Los_Angeles", // ensure formatted output stays in PST/PDT
       });
     });
 
@@ -77,6 +96,7 @@ router.get("/availability", async (req, res) => {
       .json({ error: "Failed to fetch availability", details: err.message });
   }
 });
+
 
 // ----------------- HELPER -----------------
 function convertTo24Hour(time12h) {
@@ -93,6 +113,7 @@ function convertTo24Hour(time12h) {
   return `${hours}:${minutes}`;
 }
 
+// ----------------- BOOK APPOINTMENT -----------------
 // ----------------- BOOK APPOINTMENT -----------------
 router.post("/book", async (req, res) => {
   console.log("---- BOOK REQUEST RECEIVED ----");
@@ -116,7 +137,14 @@ router.post("/book", async (req, res) => {
     }
 
     const time24 = convertTo24Hour(time);
-    const startDateTime = new Date(`${date}T${time24}:00-08:00`);
+
+    // ⭐ FIX — Force time to be interpreted as PST/PDT on Render
+    const startDateTime = new Date(
+      new Date(`${date}T${time24}:00`).toLocaleString("en-US", {
+        timeZone: "America/Los_Angeles",
+      })
+    );
+
     const endDateTime = new Date(startDateTime.getTime() + 60 * 60 * 1000);
 
     // Insert using NEW appointment_date field
@@ -499,7 +527,13 @@ router.post("/admin-reschedule", async (req, res) => {
 
     const googleEventId = result.rows[0].google_event_id;
 
-    const start = new Date(`${newDate}T${time24}:00-08:00`);
+    // ⭐ FIX — Render-safe timezone conversion (same as /book)
+    const start = new Date(
+      new Date(`${newDate}T${time24}:00`).toLocaleString("en-US", {
+        timeZone: "America/Los_Angeles",
+      })
+    );
+
     const end = new Date(start.getTime() + 60 * 60 * 1000);
 
     // GOOGLE EVENT UPDATE (Google sends update email)
