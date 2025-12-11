@@ -6,7 +6,7 @@ const { pool } = require("../db");
 const router = express.Router();
 
 // ----------------- CONFIG -----------------
-const TIMEZONE = "America/Los_Angeles";
+const TIMEZONE = "America/Los_Angeles"; // Provider timezone (PST/PDT)
 
 // OAuth2 client using env variables
 const oauth2Client = new google.auth.OAuth2(
@@ -22,15 +22,16 @@ oauth2Client.setCredentials({
 
 const calendar = google.calendar({ version: "v3", auth: oauth2Client });
 
-// Booking template: adjust as you like (24h "HH:MM" format)
+// Booking template: adjust as you like (24h "HH:MM" format in provider time)
 const BOOKING_TIMES = ["08:00", "09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00"];
 
-  // ----------------- GET AVAILABLE TIMES -----------------
+// ----------------- GET AVAILABLE TIMES -----------------
 router.get("/availability", async (req, res) => {
   try {
     const { date } = req.query; // YYYY-MM-DD
     if (!date) return res.status(400).json({ error: "Date is required" });
 
+    // Interpret the day's bounds as provider-local time (-08:00)
     const timeMin = new Date(`${date}T00:00:00-08:00`).toISOString();
     const timeMax = new Date(`${date}T23:59:59-08:00`).toISOString();
 
@@ -50,41 +51,27 @@ router.get("/availability", async (req, res) => {
       return { start, end };
     });
 
-
     const freeSlots = BOOKING_TIMES.filter((slot) => {
       const [hour, minute] = slot.split(":");
 
-      // BEFORE (incorrect on Render):
-      // const start = new Date(`${date}T${hour}:${minute}:00`);
-
-      // AFTER (correct):
-      const start = new Date(
-        new Date(`${date}T${hour}:${minute}:00`).toLocaleString("en-US", {
-          timeZone: "America/Los_Angeles", // force PST/PDT interpretation
-        })
-      );
-
+      // Build provider-local time using fixed -08:00 offset
+      const start = new Date(`${date}T${hour}:${minute}:00-08:00`);
       const end = new Date(start.getTime() + 60 * 60 * 1000);
 
+      // If this slot overlaps ANY busy event, it's not free
       return !busyTimes.some(
         (busy) => start < busy.end && end > busy.start
       );
     });
 
-    // ⭐ FIX #2 — Format times in provider timezone (LA)
+    // Format times for display in provider timezone (PST)
     const formatted = freeSlots.map((slot) => {
       const [hour, minute] = slot.split(":");
-
-      const d = new Date(
-        new Date(`${date}T${hour}:${minute}:00`).toLocaleString("en-US", {
-          timeZone: "America/Los_Angeles",
-        })
-      );
-
+      const d = new Date(`${date}T${hour}:${minute}:00-08:00`);
       return d.toLocaleTimeString("en-US", {
         hour: "2-digit",
         minute: "2-digit",
-        timeZone: "America/Los_Angeles", // ensure formatted output stays in PST/PDT
+        timeZone: TIMEZONE,
       });
     });
 
@@ -96,7 +83,6 @@ router.get("/availability", async (req, res) => {
       .json({ error: "Failed to fetch availability", details: err.message });
   }
 });
-
 
 // ----------------- HELPER -----------------
 function convertTo24Hour(time12h) {
@@ -113,7 +99,6 @@ function convertTo24Hour(time12h) {
   return `${hours}:${minutes}`;
 }
 
-// ----------------- BOOK APPOINTMENT -----------------
 // ----------------- BOOK APPOINTMENT -----------------
 router.post("/book", async (req, res) => {
   console.log("---- BOOK REQUEST RECEIVED ----");
@@ -136,18 +121,21 @@ router.post("/book", async (req, res) => {
       return res.status(400).json({ success: false, error: "Missing fields" });
     }
 
-    const time24 = convertTo24Hour(time);
+    const time24 = convertTo24Hour(time); // e.g. "08:00"
 
-    // ⭐ FIX — Force time to be interpreted as PST/PDT on Render
-    const startDateTime = new Date(
-      new Date(`${date}T${time24}:00`).toLocaleString("en-US", {
-        timeZone: "America/Los_Angeles",
-      })
-    );
+    // Build provider-local RFC3339 timestamps with explicit -08:00 offset
+    const [hStr, mStr] = time24.split(":");
+    const hourNum = parseInt(hStr, 10);
+    const nextHour = String(hourNum + 1).padStart(2, "0");
 
-    const endDateTime = new Date(startDateTime.getTime() + 60 * 60 * 1000);
+    const startLocal = `${date}T${time24}:00-08:00`;
+    const endLocal = `${date}T${nextHour}:${mStr}:00-08:00`;
 
-    // Insert using NEW appointment_date field
+    // Store as Date objects in DB
+    const startDateTime = new Date(startLocal);
+    const endDateTime = new Date(endLocal);
+
+    // Insert using appointment_date field
     const dbRes = await pool.query(
       `INSERT INTO appointments (
          user_id,
@@ -182,8 +170,8 @@ router.post("/book", async (req, res) => {
     console.log("DB insert result:", appointment);
     console.log("🔔 Booking created with userId:", userId);
 
-
     // ---------------- GOOGLE CALENDAR EVENT ----------------
+    // Use the same provider-local timestamp strings; no toISOString() here.
     const event = {
       summary: appointment.appointment_type || "Appointment",
       description: `Booked by: ${email}`,
@@ -192,12 +180,10 @@ router.post("/book", async (req, res) => {
         { email: "empowermeddev@gmail.com" },
       ],
       start: {
-        dateTime: startDateTime.toISOString(),
-        timeZone: TIMEZONE,
+        dateTime: startLocal, // "YYYY-MM-DDTHH:MM:SS-08:00"
       },
       end: {
-        dateTime: endDateTime.toISOString(),
-        timeZone: TIMEZONE,
+        dateTime: endLocal,
       },
       reminders: {
         useDefault: true,
@@ -300,7 +286,6 @@ router.get("/user-appointments", checkJwt, async (req, res) => {
   }
 });
 
-
 // ----------------- CANCEL APPOINTMENT -----------------
 router.post("/cancel", async (req, res) => {
   try {
@@ -351,7 +336,6 @@ router.post("/cancel", async (req, res) => {
     res.status(500).json({ error: "Failed to cancel appointment" });
   }
 });
-
 
 // ---------------------------------------------------
 // ADMIN: GET ALL APPOINTMENTS (DB + GOOGLE CALENDAR)
@@ -498,8 +482,7 @@ router.post("/admin-cancel", async (req, res) => {
   }
 });
 
-
-// ----------------- ADMIN RESCHEDULE (Google-email only) -----------------
+// ----------------- ADMIN RESCHEDULE -----------------
 router.post("/admin-reschedule", async (req, res) => {
   try {
     const { appointmentId, newDate, newTime } = req.body;
@@ -527,29 +510,31 @@ router.post("/admin-reschedule", async (req, res) => {
 
     const googleEventId = result.rows[0].google_event_id;
 
-    // ⭐ FIX — Render-safe timezone conversion (same as /book)
-    const start = new Date(
-      new Date(`${newDate}T${time24}:00`).toLocaleString("en-US", {
-        timeZone: "America/Los_Angeles",
-      })
-    );
+    // Build provider-local strings with explicit -08:00 offset
+    const [hStr, mStr] = time24.split(":");
+    const hourNum = parseInt(hStr, 10);
+    const nextHour = String(hourNum + 1).padStart(2, "0");
 
-    const end = new Date(start.getTime() + 60 * 60 * 1000);
+    const startLocal = `${newDate}T${time24}:00-08:00`;
+    const endLocal = `${newDate}T${nextHour}:${mStr}:00-08:00`;
 
     // GOOGLE EVENT UPDATE (Google sends update email)
     if (googleEventId) {
       await calendar.events.patch({
         calendarId: "primary",
         eventId: googleEventId,
-        sendUpdates: "all",  // <-- Google sends “Your appointment changed” email
+        sendUpdates: "all",
         requestBody: {
-          start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
-          end: { dateTime: end.toISOString(), timeZone: TIMEZONE },
+          start: { dateTime: startLocal },
+          end:   { dateTime: endLocal },
         },
       });
     }
 
-    // Update DB
+    // Update DB with real Date objects
+    const start = new Date(startLocal);
+    const end = new Date(endLocal);
+
     await pool.query(
       `UPDATE appointments
        SET appointment_date=$1, start_time=$2, end_time=$3
@@ -564,5 +549,32 @@ router.post("/admin-reschedule", async (req, res) => {
     res.status(500).json({ error: "Admin reschedule failed" });
   }
 });
+
+// ----------------- DEBUG TIMEZONE ENDPOINT -----------------
+router.get("/debug", (req, res) => {
+  try {
+    const { date = "2025-02-05", time = "08:00" } = req.query;
+
+    const localString = `${date}T${time}:00-08:00`;  // explicit PST
+    const asDate = new Date(localString);
+
+    res.json({
+      input: { date, time },
+      constructed_string: localString,
+      js_date_toString: asDate.toString(),
+      js_date_toISOString: asDate.toISOString(),
+      js_date_getHours: asDate.getHours(),
+      js_date_getUTC_Hours: asDate.getUTCHours(),
+      server_timezone_offset_minutes: asDate.getTimezoneOffset(),
+      now: {
+        toString: new Date().toString(),
+        toISOString: new Date().toISOString(),
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 module.exports = router;
