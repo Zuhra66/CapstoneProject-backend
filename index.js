@@ -52,13 +52,6 @@ app.use(
   })
 );
 
-/* ---------- PayPal Webhook  ---------- */
-app.use(
-  '/memberships/paypal/webhook',
-  express.raw({ type: 'application/json' })
-);
-
-
 app.use(express.json());
 app.use(cookieParser());
 

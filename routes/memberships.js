@@ -38,6 +38,8 @@ async function getActiveMembershipForUser(userId) {
 }
 
 async function activateMembership(userId, planId, provider, paypalSubId = null) {
+  const isPaypal = provider === "paypal";
+
   await pool.query(
     `
     INSERT INTO user_memberships (
@@ -49,7 +51,15 @@ async function activateMembership(userId, planId, provider, paypalSubId = null) 
       start_at,
       end_at
     )
-    VALUES ($1, $2, 'active', $3, $4, NOW(), NOW() + INTERVAL '1 month')
+    VALUES (
+      $1,
+      $2,
+      'active',
+      $3,
+      $4,
+      NOW(),
+      ${isPaypal ? "NULL" : "NOW() + INTERVAL '1 month'"}
+    )
     ON CONFLICT (user_id)
     DO UPDATE SET
       plan_id = EXCLUDED.plan_id,
@@ -57,7 +67,7 @@ async function activateMembership(userId, planId, provider, paypalSubId = null) 
       provider = $3,
       paypal_subscription_id = $4,
       start_at = NOW(),
-      end_at = NOW() + INTERVAL '1 month',
+      end_at = ${isPaypal ? "NULL" : "NOW() + INTERVAL '1 month'"},
       updated_at = NOW();
     `,
     [userId, planId, provider, paypalSubId]
@@ -65,6 +75,26 @@ async function activateMembership(userId, planId, provider, paypalSubId = null) 
 
   await pool.query(
     `UPDATE users SET role = 'Member', updated_at = NOW() WHERE id = $1`,
+    [userId]
+  );
+}
+
+async function markMembershipPastDue(userId) {
+  await pool.query(
+    `UPDATE user_memberships SET status = 'past_due', updated_at = NOW()
+     WHERE user_id = $1`,
+    [userId]
+  );
+}
+
+async function markMembershipFailed(userId) {
+  await pool.query(
+    `
+    UPDATE user_memberships
+    SET status = 'past_due',
+        updated_at = NOW()
+    WHERE user_id = $1
+    `,
     [userId]
   );
 }
@@ -87,18 +117,26 @@ async function cancelMembership(userId) {
   );
 }
 
-async function markMembershipPastDue(userId) {
-  await pool.query(
-    `UPDATE user_memberships SET status = 'past_due', updated_at = NOW()
-     WHERE user_id = $1`,
-    [userId]
+
+// routes/memberships.js
+async function getInternalPlanIdFromPaypalPlan(paypalPlanId) {
+  const { rows } = await pool.query(
+    `
+    SELECT id
+    FROM membership_plans
+    WHERE paypal_plan_id = $1
+      AND is_active = TRUE
+    LIMIT 1
+    `,
+    [paypalPlanId]
   );
-}
 
-async function markMembershipFailed(userId) {
-  await cancelMembership(userId);
-}
+  if (!rows.length) {
+    throw new Error(`No membership plan found for PayPal plan ${paypalPlanId}`);
+  }
 
+  return rows[0].id;
+}
 
 // =============================
 // ROUTES
@@ -284,58 +322,57 @@ router.post("/admin/cancel", checkJwt, async (req, res) => {
 });
 
 
-router.post("/paypal/webhook", async (req, res) => {
-  try {
-    const event = JSON.parse(req.body.toString());
+router.post(
+  "/paypal",
+  express.json({ type: "application/json" }),
+  async (req, res) => {
+    try {
+      const event = req.body;
+      console.log("PayPal Webhook:", event.event_type);
 
-    console.log("🔔 PayPal Webhook Received:", event.event_type);
+      const subscriptionId = event.resource?.id;
+      const userId = event.resource?.custom_id;
+      const planId = event.resource?.plan_id;
 
-    const subscriptionId = event.resource?.id;
-    const userId = event.resource?.custom_id;
-    const planId = event.resource?.plan_id;
+      if (!subscriptionId || !userId) {
+        console.warn("⚠️ Missing subscriptionId or userId");
+        return res.sendStatus(200);
+      }
 
-    if (!subscriptionId || !userId) {
-      console.warn("⚠️ Missing subscriptionId or userId");
-      return res.sendStatus(200); // acknowledge anyway
+      switch (event.event_type) {
+        case "BILLING.SUBSCRIPTION.ACTIVATED": {
+          const internalPlanId = await getInternalPlanIdFromPaypalPlan(planId);
+          await activateMembership(userId, internalPlanId, "paypal", subscriptionId);
+          break;
+        }
+
+        case "BILLING.SUBSCRIPTION.CANCELLED":
+          await cancelMembership(userId);
+          break;
+
+        case "BILLING.SUBSCRIPTION.SUSPENDED":
+          await markMembershipPastDue(userId);
+          break;
+
+        case "BILLING.SUBSCRIPTION.PAYMENT.FAILED":
+          await markMembershipFailed(userId);
+          break;
+
+        case "BILLING.SUBSCRIPTION.RE-ACTIVATED": {
+          const internalPlanId = await getInternalPlanIdFromPaypalPlan(planId);
+          await activateMembership(userId, internalPlanId, "paypal", subscriptionId);
+          break;
+        }
+      }
+
+      res.sendStatus(200);
+    } catch (err) {
+      console.error("PayPal Webhook Error:", err);
+      res.sendStatus(500);
     }
-
-    switch (event.event_type) {
-      case "BILLING.SUBSCRIPTION.ACTIVATED":
-        console.log("✅ Subscription activated for user:", userId);
-        await activateMembership(userId, planId, "paypal", subscriptionId);
-        break;
-
-      case "BILLING.SUBSCRIPTION.CANCELLED":
-        console.log("🛑 Subscription cancelled for user:", userId);
-        await cancelMembership(userId);
-        break;
-
-      case "BILLING.SUBSCRIPTION.SUSPENDED":
-        console.log("⏸ Subscription suspended for user:", userId);
-        await markMembershipPastDue(userId);
-        break;
-
-      case "BILLING.SUBSCRIPTION.PAYMENT.FAILED":
-        console.log("❌ Payment failed for user:", userId);
-        await markMembershipFailed(userId);
-        break;
-
-      case "BILLING.SUBSCRIPTION.RE-ACTIVATED":
-        console.log("🔄 Subscription re-activated for user:", userId);
-        await activateMembership(userId, planId, "paypal", subscriptionId);
-        break;
-
-      default:
-        console.log("ℹ️ Unhandled PayPal event:", event.event_type);
-    }
-
-    res.sendStatus(200);
-
-  } catch (err) {
-    console.error("🔥 PayPal Webhook Error:", err);
-    res.sendStatus(500);
   }
-});
+);
+
 
 router.post("/paypal/create", checkJwt, async (req, res) => {
   try {
@@ -386,7 +423,6 @@ router.post("/paypal/create", checkJwt, async (req, res) => {
     res.status(500).json({ error: "Failed to create subscription" });
   }
 });
-
 
 
 router.getActiveMembershipForUser = getActiveMembershipForUser;
