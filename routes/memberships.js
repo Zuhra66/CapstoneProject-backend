@@ -3,6 +3,7 @@ const router = express.Router();
 const { pool } = require("../db");
 const checkJwt = require('../middleware/auth0-check');
 const { cancelPaypalSubscription } = require("../lib/paypal");
+const { verifyPaypalWebhook } = require("../lib/paypal");
 
 const { createSubscription } = require("../lib/paypal");
 
@@ -327,6 +328,13 @@ router.post(
   express.json({ type: "application/json" }),
   async (req, res) => {
     try {
+
+      const isValid = await verifyPaypalWebhook(req);
+      if (!isValid) {
+        console.warn("⚠️ Invalid PayPal webhook signature");
+        return res.sendStatus(400);
+      }
+
       const event = req.body;
       console.log("PayPal Webhook:", event.event_type);
 

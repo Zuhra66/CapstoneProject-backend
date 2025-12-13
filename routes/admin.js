@@ -457,7 +457,7 @@ const syncMembershipWithRole = async (userId, newRole, isActive) => {
   try {
     const { rows } = await dbPool.query(
       `
-      SELECT id, status, provider, external_ref
+      SELECT id, status, provider, paypal_subscription_id
       FROM user_memberships
       WHERE user_id = $1
       ORDER BY updated_at DESC
@@ -487,23 +487,24 @@ const syncMembershipWithRole = async (userId, newRole, isActive) => {
       console.log("🛑 Cancelling membership for user:", userId);
 
       // Cancel PayPal subscription (STOP BILLING)
+      // Cancel PayPal subscription (STOP BILLING)
       if (
         membership.provider === "paypal" &&
-        membership.external_ref
+        membership.paypal_subscription_id
       ) {
         console.log(
           "🔔 Cancelling PayPal subscription:",
-          membership.external_ref
+          membership.paypal_subscription_id
         );
 
         try {
-          await cancelPaypalSubscription(membership.external_ref);
+          await cancelPaypalSubscription(membership.paypal_subscription_id);
         } catch (paypalErr) {
           console.error(
             "⚠️ PayPal cancellation failed (continuing local cancel):",
             paypalErr.message
           );
-          // ❗ Do NOT throw — access must still be revoked
+          // Do NOT throw — access must still be revoked
         }
       }
 
