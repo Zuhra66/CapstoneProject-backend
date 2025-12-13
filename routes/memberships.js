@@ -323,63 +323,58 @@ router.post("/admin/cancel", checkJwt, async (req, res) => {
 });
 
 
-router.post(
-  "/paypal",
-  express.json({ type: "application/json" }),
-  async (req, res) => {
-    try {
-
-      const isValid = await verifyPaypalWebhook(req);
-      if (!isValid) {
-        console.warn("⚠️ Invalid PayPal webhook signature");
-        return res.sendStatus(400);
-      }
-
-      const event = req.body;
-      console.log("PayPal Webhook:", event.event_type);
-
-      const subscriptionId = event.resource?.id;
-      const userId = event.resource?.custom_id;
-      const planId = event.resource?.plan_id;
-
-      if (!subscriptionId || !userId) {
-        console.warn("⚠️ Missing subscriptionId or userId");
-        return res.sendStatus(200);
-      }
-
-      switch (event.event_type) {
-        case "BILLING.SUBSCRIPTION.ACTIVATED": {
-          const internalPlanId = await getInternalPlanIdFromPaypalPlan(planId);
-          await activateMembership(userId, internalPlanId, "paypal", subscriptionId);
-          break;
-        }
-
-        case "BILLING.SUBSCRIPTION.CANCELLED":
-          await cancelMembership(userId);
-          break;
-
-        case "BILLING.SUBSCRIPTION.SUSPENDED":
-          await markMembershipPastDue(userId);
-          break;
-
-        case "BILLING.SUBSCRIPTION.PAYMENT.FAILED":
-          await markMembershipFailed(userId);
-          break;
-
-        case "BILLING.SUBSCRIPTION.RE-ACTIVATED": {
-          const internalPlanId = await getInternalPlanIdFromPaypalPlan(planId);
-          await activateMembership(userId, internalPlanId, "paypal", subscriptionId);
-          break;
-        }
-      }
-
-      res.sendStatus(200);
-    } catch (err) {
-      console.error("PayPal Webhook Error:", err);
-      res.sendStatus(500);
+router.post("/paypal", async (req, res) => {
+  try {
+    const isValid = await verifyPaypalWebhook(req);
+    if (!isValid) {
+      console.warn("⚠️ Invalid PayPal webhook signature");
+      return res.sendStatus(400);
     }
+
+    const event = JSON.parse(req.body.toString());
+    console.log("PayPal Webhook:", event.event_type);
+
+    const subscriptionId = event.resource?.id;
+    const userId = event.resource?.custom_id;
+    const planId = event.resource?.plan_id;
+
+    if (!subscriptionId || !userId) {
+      console.warn("⚠️ Missing subscriptionId or userId");
+      return res.sendStatus(200);
+    }
+
+    switch (event.event_type) {
+      case "BILLING.SUBSCRIPTION.ACTIVATED": {
+        const internalPlanId = await getInternalPlanIdFromPaypalPlan(planId);
+        await activateMembership(userId, internalPlanId, "paypal", subscriptionId);
+        break;
+      }
+
+      case "BILLING.SUBSCRIPTION.CANCELLED":
+        await cancelMembership(userId);
+        break;
+
+      case "BILLING.SUBSCRIPTION.SUSPENDED":
+        await markMembershipPastDue(userId);
+        break;
+
+      case "BILLING.SUBSCRIPTION.PAYMENT.FAILED":
+        await markMembershipFailed(userId);
+        break;
+
+      case "BILLING.SUBSCRIPTION.RE-ACTIVATED": {
+        const internalPlanId = await getInternalPlanIdFromPaypalPlan(planId);
+        await activateMembership(userId, internalPlanId, "paypal", subscriptionId);
+        break;
+      }
+    }
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("PayPal Webhook Error:", err);
+    res.sendStatus(500);
   }
-);
+});
 
 
 router.post("/paypal/create", checkJwt, async (req, res) => {
