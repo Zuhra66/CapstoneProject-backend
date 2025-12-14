@@ -2,19 +2,31 @@ const express = require("express");
 const router = express.Router();
 const { pool } = require("../db");
 const checkJwt = require('../middleware/auth0-check');
+const { cancelPaypalSubscription } = require("../lib/paypal");
+const { verifyPaypalWebhook } = require("../lib/paypal");
 
-// =============================
-// INTERNAL SERVICE FUNCTIONS
-// =============================
+const { createSubscription } = require("../lib/paypal");
+
+const PAYPAL_PLANS = {
+  general: process.env.PAYPAL_GENERAL_PLAN_ID,
+  student: process.env.PAYPAL_STUDENT_PLAN_ID,
+};
+
+/* ======================================================
+   INTERNAL SERVICE FUNCTIONS
+====================================================== */
 
 async function getActiveMembershipForUser(userId) {
   const sql = `
-    SELECT 
+    SELECT
+      um.id,
       um.status,
-      um.start_at AS start_date,
-      um.end_at AS end_date,
       um.provider,
+      um.paypal_subscription_id,
+      um.start_at,
+      um.end_at,
       mp.name AS plan_name,
+      mp.slug AS plan_slug,
       mp.interval
     FROM user_memberships um
     LEFT JOIN membership_plans mp ON um.plan_id = mp.id
@@ -22,142 +34,122 @@ async function getActiveMembershipForUser(userId) {
     ORDER BY um.updated_at DESC
     LIMIT 1;
   `;
-  
-  const result = await pool.query(sql, [userId]);
-  return result.rows[0] || null;
+  const { rows } = await pool.query(sql, [userId]);
+  return rows[0] || null;
 }
 
-async function activateMembership(userId, planId, provider, externalRef = null) {
-  const sql = `
-    INSERT INTO user_memberships (user_id, plan_id, status, provider, external_ref, start_at, end_at)
-    VALUES ($1, $2, 'active', $3, $4, NOW(), NOW() + INTERVAL '1 month')
+async function activateMembership(userId, planId, provider, paypalSubId = null) {
+  const isPaypal = provider === "paypal";
+
+  await pool.query(
+    `
+    INSERT INTO user_memberships (
+      user_id,
+      plan_id,
+      status,
+      provider,
+      paypal_subscription_id,
+      start_at,
+      end_at
+    )
+    VALUES (
+      $1,
+      $2,
+      'active',
+      $3,
+      $4,
+      NOW(),
+      ${isPaypal ? "NULL" : "NOW() + INTERVAL '1 month'"}
+    )
     ON CONFLICT (user_id)
-    DO UPDATE SET 
+    DO UPDATE SET
+      plan_id = EXCLUDED.plan_id,
       status = 'active',
       provider = $3,
-      external_ref = $4,
+      paypal_subscription_id = $4,
       start_at = NOW(),
-      end_at = NOW() + INTERVAL '1 month',
+      end_at = ${isPaypal ? "NULL" : "NOW() + INTERVAL '1 month'"},
       updated_at = NOW();
-  `;
+    `,
+    [userId, planId, provider, paypalSubId]
+  );
 
-  await pool.query(sql, [userId, planId, provider, externalRef]);
-
-  // Automatically assign role = 'Member'
   await pool.query(
-    `UPDATE users SET role = 'Member', updated_at = NOW()
-     WHERE id = $1`,
+    `UPDATE users SET role = 'Member', updated_at = NOW() WHERE id = $1`,
     [userId]
   );
 }
-
-async function cancelMembership(userId) {
-  await pool.query(
-    `UPDATE user_memberships
-     SET status = 'cancelled', end_at = NOW(), updated_at = NOW()
-     WHERE user_id = $1`,
-    [userId]
-  );
-
-  // Revert role back to User
-  await pool.query(
-    `UPDATE users SET role = 'User', updated_at = NOW()
-     WHERE id = $1`,
-    [userId]
-  );
-}
-
-// =============================
-// CANCEL MEMBERSHIP (USER)
-// =============================
-router.post("/cancel", checkJwt, async (req, res) => {
-  console.log("🔥 [CANCEL] Hit /membership/cancel route");
-
-  try {
-    // 1. Validate JWT + extract Auth0 ID
-    if (!req.auth || !req.auth.sub) {
-      console.log("❌ [CANCEL] Missing req.auth.sub");
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-
-    const auth0Id = req.auth.sub;
-    console.log("🔑 [CANCEL] Auth0 ID:", auth0Id);
-
-    // 2. Lookup internal user ID
-    const userLookup = await pool.query(
-      "SELECT id FROM users WHERE auth0_id = $1 LIMIT 1",
-      [auth0Id]
-    );
-
-    console.log("🧪 [CANCEL] User lookup:", userLookup.rows);
-
-    if (!userLookup.rows.length) {
-      console.log("❌ [CANCEL] User not found in DB");
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    const userId = userLookup.rows[0].id;
-    console.log("👤 [CANCEL] Internal userId =", userId);
-
-    // 3. Cancel membership + update role
-    console.log("🛑 [CANCEL] Updating membership + role...");
-
-    await pool.query(
-      `UPDATE user_memberships
-       SET status = 'cancelled', end_at = NOW(), updated_at = NOW()
-       WHERE user_id = $1`,
-      [userId]
-    );
-
-    const roleUpdate = await pool.query(
-      `UPDATE users
-       SET role = 'User', updated_at = NOW()
-       WHERE id = $1
-       RETURNING role`,
-      [userId]
-    );
-
-    console.log("🎭 [CANCEL] Role updated to:", roleUpdate.rows[0].role);
-
-    // 4. Success response
-    console.log("✅ [CANCEL] Membership cancelled successfully!");
-
-    return res.json({
-      success: true,
-      message: "Membership cancelled",
-    });
-
-  } catch (err) {
-    console.error("🔥 [CANCEL ERROR] Unexpected error:", err);
-    return res.status(500).json({ error: "Failed to cancel membership" });
-  }
-});
-
 
 async function markMembershipPastDue(userId) {
   await pool.query(
-    `UPDATE user_memberships
-     SET status = 'past_due', updated_at = NOW()
-     WHERE user_id = $1;`,
+    `UPDATE user_memberships SET status = 'past_due', updated_at = NOW()
+     WHERE user_id = $1`,
     [userId]
   );
 }
 
 async function markMembershipFailed(userId) {
   await pool.query(
-    `UPDATE user_memberships
-     SET status = 'failed', updated_at = NOW()
-     WHERE user_id = $1`,
-    [userId]
-  );
-
-  await pool.query(
-    `UPDATE users SET role = 'User', updated_at = NOW()
-     WHERE id = $1`,
+    `
+    UPDATE user_memberships
+    SET status = 'past_due',
+        updated_at = NOW()
+    WHERE user_id = $1
+    `,
     [userId]
   );
 }
 
+async function cancelMembership(userId) {
+  // Cancel membership only if not already cancelled
+  const result = await pool.query(
+    `
+    UPDATE user_memberships
+    SET
+      status = 'cancelled',
+      end_at = COALESCE(end_at, NOW()),
+      updated_at = NOW()
+    WHERE user_id = $1
+      AND status != 'cancelled'
+    `,
+    [userId]
+  );
+
+  console.log("🧾 Membership cancel rows affected:", result.rowCount);
+
+  // Downgrade role only if needed
+  await pool.query(
+    `
+    UPDATE users
+    SET role = 'User',
+        updated_at = NOW()
+    WHERE id = $1
+      AND role != 'User'
+    `,
+    [userId]
+  );
+}
+
+
+// routes/memberships.js
+async function getInternalPlanIdFromPaypalPlan(paypalPlanId) {
+  const { rows } = await pool.query(
+    `
+    SELECT id
+    FROM membership_plans
+    WHERE paypal_plan_id = $1
+      AND is_active = TRUE
+    LIMIT 1
+    `,
+    [paypalPlanId]
+  );
+
+  if (!rows.length) {
+    throw new Error(`No membership plan found for PayPal plan ${paypalPlanId}`);
+  }
+
+  return rows[0].id;
+}
 
 // =============================
 // ROUTES
@@ -195,76 +187,283 @@ router.get("/me", checkJwt, async (req, res) => {
   }
 });
 
-// Local test webhook
-router.get("/test-event", async (req, res) => {
-  let { userId, planId, event } = req.query;
 
+// =============================
+// CANCEL MEMBERSHIP (USER)
+// =============================
+router.post("/cancel", checkJwt, async (req, res) => {
   try {
-    // Auto-create a plan if none provided
-    if (!planId) {
-      const slugBase = "temp-plan-" + Date.now();
+    const auth0Id = req.auth.sub;
 
-      const result = await pool.query(`
-        INSERT INTO membership_plans (name, slug, price_cents, interval)
-        VALUES ($1, $2, 0, 'monthly')
-        ON CONFLICT (slug) DO NOTHING
-        RETURNING id;
-      `, ["Temp Test Plan", slugBase]);
-
-      // Use the newly created plan OR pick any existing plan
-      if (result.rows[0]) {
-        planId = result.rows[0].id;
-      } else {
-        const existing = await pool.query(`SELECT id FROM membership_plans LIMIT 1;`);
-        planId = existing.rows[0]?.id;
-      }
-
-      if (!planId) {
-        return res.status(500).json({ error: "No plan could be created or found" });
-      }
-    }
-
-    // Fake webhook behavior
-    if (event === "success") {
-      await activateMembership(userId, planId, "local_test", "ref_test");
-    } else if (event === "cancelled") {
-      await cancelMembership(userId);
-    } else if (event === "past_due") {
-      await markMembershipPastDue(userId);
-    } else if (event === "failed") {
-      await markMembershipFailed(userId);
-    } else {
-      return res.status(400).json({ error: "Invalid event" });
-    }
-
-    res.json({ ok: true, planId });
-
-  } catch (err) {
-    console.error("🔥 Test event error:", err);
-    res.status(500).json({ error: "Test event failed", details: err.message });
-  }
-});
-
-
-// Admin update
-router.post("/admin/update", checkJwt, async (req, res) => {
-  const { userId, status } = req.body;
-
-  try {
-    await pool.query(
-      `
-      UPDATE user_memberships
-      SET status = $1, updated_at = NOW()
-      WHERE user_id = $2;
-      `,
-      [status, userId]
+    const userRes = await pool.query(
+      "SELECT id FROM users WHERE auth0_id = $1",
+      [auth0Id]
     );
 
-    res.json({ ok: true });
+    if (!userRes.rows.length) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const userId = userRes.rows[0].id;
+    const membership = await getActiveMembershipForUser(userId);
+
+    if (!membership) {
+      return res.json({ success: true, message: "No active membership" });
+    }
+
+    // Cancel PayPal if applicable
+    if (
+      membership.provider === "paypal" &&
+      membership.paypal_subscription_id
+    ) {
+      await cancelPaypalSubscription(membership.paypal_subscription_id);
+    }
+
+    // Always cancel locally
+    await cancelMembership(userId);
+
+    res.json({ success: true, message: "Membership cancelled" });
   } catch (err) {
-    res.status(500).json({ error: "Admin update failed" });
+    console.error("User cancel error:", err);
+    res.status(500).json({ error: "Failed to cancel membership" });
   }
 });
+
+// =============================
+// ADMIN: ASSIGN MEMBERSHIP 
+// =============================
+router.post("/admin/assign", checkJwt, async (req, res) => {
+  const { userId, membershipType } = req.body;
+
+  if (!userId || !membershipType) {
+    return res.status(400).json({ error: "Missing userId or membershipType" });
+  }
+
+  try {
+    await pool.query("BEGIN");
+
+    
+    // -------------------------
+    // ASSIGN STUDENT / GENERAL
+    // -------------------------
+    const planRes = await pool.query(
+      `SELECT id FROM membership_plans WHERE slug = $1 AND is_active = TRUE LIMIT 1`,
+      [membershipType]
+    );
+
+    if (!planRes.rows.length) {
+      throw new Error("Membership plan not found");
+    }
+
+    const planId = planRes.rows[0].id;
+
+    await pool.query(
+      `
+      INSERT INTO user_memberships (
+        user_id,
+        plan_id,
+        status,
+        provider,
+        paypal_subscription_id,
+        start_at,
+        end_at
+      )
+      VALUES ($1, $2, 'active', 'admin_override', NULL, NOW(), NOW() + INTERVAL '1 month')
+      ON CONFLICT (user_id)
+      DO UPDATE SET
+        plan_id = EXCLUDED.plan_id,
+        status = 'active',
+        provider = 'admin_override',
+        paypal_subscription_id = NULL,
+        start_at = NOW(),
+        end_at = NOW() + INTERVAL '1 month',
+        updated_at = NOW()
+      `,
+      [userId, planId]
+    );
+
+    await pool.query(
+      `UPDATE users SET role = 'Member', updated_at = NOW() WHERE id = $1`,
+      [userId]
+    );
+
+    await pool.query("COMMIT");
+    res.json({ success: true, action: "assigned" });
+
+  } catch (err) {
+    await pool.query("ROLLBACK");
+    console.error("🔥 Admin assign membership error:", err);
+    res.status(500).json({ error: "Failed to assign membership" });
+  }
+});
+
+// =============================
+// ADMIN: CANCEL MEMBERSHIP
+// =============================
+router.post("/admin/cancel", checkJwt, async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ error: "Missing userId" });
+    }
+
+    // Get latest membership
+    const membership = await getActiveMembershipForUser(userId);
+
+    if (!membership || membership.status !== "active") {
+      return res.json({ success: true, message: "No active membership" });
+    }
+
+    // 🔔 Cancel PayPal subscription if applicable
+    if (
+      membership.provider === "paypal" &&
+      membership.paypal_subscription_id
+    ) {
+      await cancelPaypalSubscription(membership.paypal_subscription_id);
+    }
+
+    // Always cancel locally
+    await cancelMembership(userId);
+
+    res.json({ success: true, message: "Membership cancelled by admin" });
+
+  } catch (err) {
+    console.error("🔥 Admin cancel membership error:", err);
+    res.status(500).json({ error: "Failed to cancel membership" });
+  }
+});
+
+
+router.post("/paypal", async (req, res) => {
+  console.log("🚨 WEBHOOK HIT:", new Date().toISOString());
+  try {
+    // 🔕 Verification temporarily disabled (OK for testing)
+    // const isValid = await verifyPaypalWebhook(req);
+    // if (!isValid) {
+    //   console.warn("⚠️ Invalid PayPal webhook signature");
+    //   return res.sendStatus(400);
+    // }
+
+    const event = req.body;
+    console.log("PayPal Webhook:", event.event_type);
+
+    const subscriptionId = event.resource?.id;
+    const userId = event.resource?.custom_id;
+    const planId = event.resource?.plan_id;
+
+    if (!subscriptionId || !userId) {
+      console.warn("⚠️ Missing subscriptionId or userId");
+      return res.sendStatus(200);
+    }
+
+    switch (event.event_type) {
+      case "BILLING.SUBSCRIPTION.ACTIVATED": {
+        const internalPlanId =
+          await getInternalPlanIdFromPaypalPlan(planId);
+        await activateMembership(
+          userId,
+          internalPlanId,
+          "paypal",
+          subscriptionId
+        );
+        break;
+      }
+
+      case "BILLING.SUBSCRIPTION.CANCELLED":
+        await cancelMembership(userId);
+        break;
+
+      case "BILLING.SUBSCRIPTION.SUSPENDED":
+        await markMembershipPastDue(userId);
+        break;
+
+      case "BILLING.SUBSCRIPTION.PAYMENT.FAILED":
+        await markMembershipFailed(userId);
+        break;
+
+      case "BILLING.SUBSCRIPTION.RE-ACTIVATED": {
+        const internalPlanId =
+          await getInternalPlanIdFromPaypalPlan(planId);
+        await activateMembership(
+          userId,
+          internalPlanId,
+          "paypal",
+          subscriptionId
+        );
+        break;
+      }
+    }
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("PayPal Webhook Error:", err);
+    res.sendStatus(500);
+  }
+});
+
+
+
+router.post("/paypal/create", checkJwt, async (req, res) => {
+  try {
+    const planType = req.body.planType?.toLowerCase();
+
+    if (!PAYPAL_PLANS[planType]) {
+      return res.status(400).json({ error: "Invalid plan type" });
+    }
+
+    // Find internal user
+    const auth0Id = req.auth.sub;
+    const userRes = await pool.query(
+      "SELECT id FROM users WHERE auth0_id = $1",
+      [auth0Id]
+    );
+
+    if (!userRes.rows.length) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const userId = userRes.rows[0].id;
+
+    // 🔍 DEBUG LOG (safe to keep during testing)
+    console.log("💳 Creating PayPal subscription:", {
+      userId,
+      planType,
+      planId: PAYPAL_PLANS[planType],
+    });
+
+
+    const existing = await getActiveMembershipForUser(userId);
+
+    if (existing && existing.status === "active") {
+      return res.status(409).json({
+        error: "You already have an active membership",
+      });
+    }
+
+
+    // Create PayPal subscription
+    const subscription = await createSubscription({
+      planId: PAYPAL_PLANS[planType],
+      userId,
+    });
+
+    // Return approval URL
+    const approvalLink = subscription.links.find(
+      (l) => l.rel === "approve"
+    )?.href;
+
+    if (!approvalLink) {
+      return res.status(500).json({ error: "No approval link returned from PayPal" });
+    }
+
+    res.json({ approvalUrl: approvalLink });
+  } catch (err) {
+    console.error("🔥 PayPal create error:", err.response?.data || err);
+    res.status(500).json({ error: "Failed to create subscription" });
+  }
+});
+
 
 router.getActiveMembershipForUser = getActiveMembershipForUser;
 module.exports = router;

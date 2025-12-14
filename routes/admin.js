@@ -9,6 +9,8 @@ const multer = require('multer');
 const { pool: dbPool } = require('../db');
 const { checkJwt, attachAdminUser, requireAdmin } = require('../middleware/admin-check');
 
+const { cancelPaypalSubscription } = require('../lib/paypal');
+
 // ---------- File upload config for events & education ----------
 
 // Root uploads folder: <project-root>/uploads
@@ -451,64 +453,80 @@ const logAdminAction = async (
   }
 };
 
-// -------------------------------------
-// Membership sync helper
-// -------------------------------------
 const syncMembershipWithRole = async (userId, newRole, isActive) => {
   try {
-    console.log('🔄 Syncing membership with role for user:', userId);
-    console.log('🔧 New role:', newRole, 'Is active:', isActive);
-
-    const membershipResult = await dbPool.query(
-      `SELECT um.status, um.id FROM user_memberships um WHERE um.user_id = $1`,
+    const { rows } = await dbPool.query(
+      `
+      SELECT id, status, provider, paypal_subscription_id
+      FROM user_memberships
+      WHERE user_id = $1
+      ORDER BY updated_at DESC
+      LIMIT 1
+      `,
       [userId]
     );
 
-    if (membershipResult.rows.length > 0) {
-      const currentMembership = membershipResult.rows[0];
+    if (!rows.length) return newRole;
 
-      if (!isActive && currentMembership.status === 'active') {
-        console.log('⚠️ User deactivated - cancelling membership');
-        await dbPool.query(
-          `UPDATE user_memberships
-           SET status = 'cancelled', updated_at = NOW()
-           WHERE id = $1`,
-          [currentMembership.id]
-        );
-        console.log('✅ Membership cancelled due to user deactivation');
-      }
+    const membership = rows[0];
+    const isActiveMembership = membership.status === "active";
 
-      if (newRole !== 'Member' && currentMembership.status === 'active') {
-        console.log('⚠️ Role changed from Member to User - cancelling membership');
-        await dbPool.query(
-          `UPDATE user_memberships
-           SET status = 'cancelled', updated_at = NOW()
-           WHERE id = $1`,
-          [currentMembership.id]
-        );
-        console.log('✅ Membership cancelled due to role change');
-      }
-
-      if (newRole === 'Member' && isActive && currentMembership.status !== 'active') {
-        console.log('⚠️ Role changed to Member - activating membership');
-        await dbPool.query(
-          `UPDATE user_memberships
-           SET status = 'active', updated_at = NOW()
-           WHERE id = $1`,
-          [currentMembership.id]
-        );
-        console.log('✅ Membership activated due to role change to Member');
-      }
+    if (newRole === "Member" && !isActiveMembership) {
+      return "User";
     }
 
-    if (newRole === 'Member' && !isActive) {
-      console.log('⚠️ Cannot have inactive Member - changing role to User');
-      return 'User';
+    // -----------------------------
+    //  CANCEL CONDITIONS
+    // -----------------------------
+
+    const shouldCancel =
+      !isActive ||               // user deactivated
+      newRole !== "Member";      // role downgraded
+
+    if (shouldCancel && isActiveMembership) {
+      console.log("🛑 Cancelling membership for user:", userId);
+
+      // Cancel PayPal subscription (STOP BILLING)
+      // Cancel PayPal subscription (STOP BILLING)
+      if (
+        membership.provider === "paypal" &&
+        membership.paypal_subscription_id
+      ) {
+        console.log(
+          "🔔 Cancelling PayPal subscription:",
+          membership.paypal_subscription_id
+        );
+
+        try {
+          await cancelPaypalSubscription(membership.paypal_subscription_id);
+        } catch (paypalErr) {
+          console.error(
+            "⚠️ PayPal cancellation failed (continuing local cancel):",
+            paypalErr.message
+          );
+          // Do NOT throw — access must still be revoked
+        }
+      }
+
+      // ✅ Always cancel locally
+      await dbPool.query(
+        `
+        UPDATE user_memberships
+        SET status = 'cancelled',
+            end_at = NOW(),
+            updated_at = NOW()
+        WHERE id = $1
+        `,
+        [membership.id]
+      );
+
+      console.log("✅ Membership cancelled locally");
     }
 
+    // NEVER ACTIVATE THROUGH ADMIN
     return newRole;
-  } catch (error) {
-    console.error('❌ Error syncing membership with role:', error);
+  } catch (err) {
+    console.error("❌ syncMembershipWithRole error:", err);
     return newRole;
   }
 };
@@ -1411,22 +1429,37 @@ router.get('/users', async (req, res) => {
         users.auth_provider,
         users.created_at,
         users.updated_at,
-        json_build_object(
-          'status', um.status,
-          'start_date', um.start_at,
-          'end_date', um.end_at,
-          'plan_name', mp.name
-        ) AS membership
+        CASE
+          WHEN m.status = 'active' THEN json_build_object(
+            'status', m.status,
+            'start_date', m.start_at,
+            'end_date', m.end_at,
+            'plan_name', m.plan_name,
+            'plan_slug', m.plan_slug
+          )
+          ELSE NULL
+        END AS membership
+
       FROM public.users
-      LEFT JOIN user_memberships um
-        ON um.user_id = users.id
-        AND um.status = 'active'
-      LEFT JOIN membership_plans mp
-        ON mp.id = um.plan_id
+      LEFT JOIN LATERAL (
+        SELECT
+          um.status,
+          um.start_at,
+          um.end_at,
+          mp.name AS plan_name,
+          mp.slug AS plan_slug
+        FROM public.user_memberships um
+        JOIN public.membership_plans mp ON mp.id = um.plan_id
+        WHERE um.user_id = users.id
+        ORDER BY um.updated_at DESC
+        LIMIT 1
+      ) m ON true
       WHERE ${where.join(' AND ')}
       ORDER BY users.created_at DESC
-      LIMIT $${i + 1} OFFSET $${i + 2}
+      LIMIT $${params.length + 1}
+      OFFSET $${params.length + 2}
     `;
+
 
     const countSql = `SELECT COUNT(*) FROM public.users WHERE ${where.join(
       ' AND '
@@ -1717,7 +1750,7 @@ router.patch('/users/:userId/role', async (req, res) => {
 
     const updatedUser = result.rows[0];
 
-    if (targetUser.auth0_id) {
+    if (targetUser.role !== updatedUser.role) {
       try {
         await updateAuth0User(targetUser.auth0_id, {
           role: updatedUser.role,

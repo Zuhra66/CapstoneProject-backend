@@ -172,7 +172,22 @@ router.get('/me', checkJwt, async (req, res) => {
     const user = await upsertUserFromAuth0(completeProfile);
 
     console.log("🔐 Logged-in user:", user);
-    const membership = await getActiveMembershipForUser(user.id);
+    const rawMembership = await getActiveMembershipForUser(user.id);
+
+const membership = rawMembership
+  ? {
+      id: rawMembership.id,
+      status: rawMembership.status,
+      provider: rawMembership.provider,
+      plan_name: rawMembership.plan_name,
+      plan_slug: rawMembership.plan_slug,
+      start_date: rawMembership.start_at,   
+      end_date: rawMembership.end_at,       
+      interval: rawMembership.interval,
+      paypal_subscription_id: rawMembership.paypal_subscription_id
+    }
+  : null;
+
 
     /* -------------------------------------------
       🔗 AUTO-LINK EXISTING APPOINTMENTS BY EMAIL - MAY NEED TO REMOVE WILL TEST FURTHER
