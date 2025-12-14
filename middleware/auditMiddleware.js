@@ -1,4 +1,9 @@
 const auditMiddleware = async (req, res, next) => {
+  // PayPal requires the raw request body for signature verification.
+  // ANY access to req.body (even reading it) will break verification.
+  if (req.originalUrl.startsWith("/memberships/paypal")) {
+    return next();
+  }
   const originalSend = res.send;
   const originalJson = res.json;
   let responseBody;
