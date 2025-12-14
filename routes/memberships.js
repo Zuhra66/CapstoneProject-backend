@@ -324,6 +324,7 @@ router.post("/admin/cancel", checkJwt, async (req, res) => {
 
 
 router.post("/paypal", async (req, res) => {
+  console.log("🚨 WEBHOOK HIT:", new Date().toISOString());
   try {
     // 🔕 Verification temporarily disabled (OK for testing)
     // const isValid = await verifyPaypalWebhook(req);
@@ -332,7 +333,7 @@ router.post("/paypal", async (req, res) => {
     //   return res.sendStatus(400);
     // }
 
-    const event = JSON.parse(req.body.toString());
+    const event = req.body;
     console.log("PayPal Webhook:", event.event_type);
 
     const subscriptionId = event.resource?.id;
