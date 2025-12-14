@@ -101,19 +101,31 @@ async function markMembershipFailed(userId) {
 }
 
 async function cancelMembership(userId) {
-  await pool.query(
+  // Cancel membership only if not already cancelled
+  const result = await pool.query(
     `
     UPDATE user_memberships
-    SET status = 'cancelled',
-        end_at = NOW(),
-        updated_at = NOW()
+    SET
+      status = 'cancelled',
+      end_at = COALESCE(end_at, NOW()),
+      updated_at = NOW()
     WHERE user_id = $1
+      AND status != 'cancelled'
     `,
     [userId]
   );
 
+  console.log("🧾 Membership cancel rows affected:", result.rowCount);
+
+  // Downgrade role only if needed
   await pool.query(
-    `UPDATE users SET role = 'User', updated_at = NOW() WHERE id = $1`,
+    `
+    UPDATE users
+    SET role = 'User',
+        updated_at = NOW()
+    WHERE id = $1
+      AND role != 'User'
+    `,
     [userId]
   );
 }
@@ -419,6 +431,16 @@ router.post("/paypal/create", checkJwt, async (req, res) => {
       planType,
       planId: PAYPAL_PLANS[planType],
     });
+
+
+    const existing = await getActiveMembershipForUser(userId);
+
+    if (existing && existing.status === "active") {
+      return res.status(409).json({
+        error: "You already have an active membership",
+      });
+    }
+
 
     // Create PayPal subscription
     const subscription = await createSubscription({
