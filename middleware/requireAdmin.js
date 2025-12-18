@@ -28,5 +28,12 @@ const requireAdmin = (req, res, next) => {
 
   console.log('✅ Admin access granted');
   console.log('========================');
+
+  console.log("🔐 REQUIRE ADMIN CHECK");
+  console.log("req.user:", req.user);
+  console.log("req.adminUser:", req.adminUser);
+
   next();
 };
+
+module.exports = requireAdmin;

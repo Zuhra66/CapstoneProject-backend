@@ -7,7 +7,8 @@ const path = require('path');              // ✅ for static uploads
 require('dotenv').config();
 
 const { pool, healthCheck } = require('./db');
-const { checkJwt, attachAdminUser, requireAdmin } = require('./middleware/admin-check');
+const checkJwt = require('./middleware/auth0-check');
+const attachUser = require('./middleware/attachUser');
 
 // Import routes
 const profileRoutes = require('./routes/profile');
@@ -22,7 +23,7 @@ const calendarRoutes = require('./routes/calendar');
 const membershipRoutes = require('./routes/memberships');
 const newsletterRoutes = require('./routes/newsletter');
 const auditLogsRoutes = require('./routes/auditLogs');
-
+const messagesRouter = require("./routes/messages");
 
 
 // Import audit middleware
@@ -161,7 +162,9 @@ const csrfSkipMiddleware = (req, res, next) => {
     fullPath.startsWith('/api/newsletter') ||
     fullPath.startsWith('/api/audit') ||         // Skip CSRF for audit logs API
     fullPath.startsWith('/calendar') ||
-    fullPath.startsWith('/memberships')
+    fullPath.startsWith('/memberships') ||
+    fullPath.startsWith('/messages')
+
   ) {
     console.log(`🔓 Skipping CSRF for: ${fullPath}`);
     return next();
@@ -224,6 +227,14 @@ app.use('/api/education', educationRouter);
 
 // NEW: Add audit logs routes (protected by admin middleware)
 app.use('/api/audit', auditLogsRoutes);
+
+app.use(
+  '/messages',
+  checkJwt,
+  attachUser,
+  messagesRouter
+);
+
 
 /* ---------- Error Handling ---------- */
 app.use((err, req, res, next) => {
