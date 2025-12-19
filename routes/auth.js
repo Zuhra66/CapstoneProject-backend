@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const axios = require('axios');
 const { pool } = require('../db');
+const { decryptMessage } = require("../lib/messageCrypto");
 
 // Import the SAME JWT middleware from admin-check
 const { checkJwt } = require('../middleware/admin-check');
@@ -244,6 +245,68 @@ const membership = rawMembership
     });
   }
 });
+
+/* ===================================================
+   GET /auth/me/messages
+   Returns messages scoped to logged-in user
+=================================================== */
+router.get("/me/messages", checkJwt, async (req, res) => {
+  try {
+    // req.auth.sub is guaranteed by checkJwt
+    const auth0Id = req.auth.sub;
+
+    // Get DB user
+    const userRes = await pool.query(
+      "SELECT id, role, is_admin FROM users WHERE auth0_id = $1",
+      [auth0Id]
+    );
+
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ messages: [] });
+    }
+
+    const user = userRes.rows[0];
+    const isAdmin = user.is_admin === true;
+
+    const result = isAdmin
+      ? await pool.query(`
+          SELECT *
+          FROM contact_messages
+          WHERE deleted_at IS NULL
+          ORDER BY created_at ASC
+        `)
+      : await pool.query(
+          `
+          SELECT *
+          FROM contact_messages
+          WHERE (sender_id = $1 OR receiver_id = $1)
+            AND deleted_at IS NULL
+          ORDER BY created_at ASC
+        `,
+          [user.id]
+        );
+
+    const messages = result.rows.map(row => ({
+      id: row.id,
+      sender_id: row.sender_id,
+      receiver_id: row.receiver_id,
+      sender_role: row.sender_role,
+      text: decryptMessage({
+        ciphertext: row.ciphertext,
+        iv: row.iv,
+        auth_tag: row.auth_tag,
+      }),
+      created_at: row.created_at,
+      read_at: row.read_at,
+    }));
+
+    res.json({ messages });
+  } catch (err) {
+    console.error("❌ /auth/me/messages error:", err);
+    res.status(500).json({ messages: [], error: "Failed to load messages" });
+  }
+});
+
 
 // POST /auth/logout
 router.post('/logout', (req, res) => {
