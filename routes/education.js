@@ -14,32 +14,43 @@ function normalizePath(p, fallback = null) {
   return `/images/${s.replace(/^\/+/, '')}`;
 }
 
-// Shape rows for the frontend (maps DB → UI fields)
+// routes/education.js
+
 function shapeArticle(r) {
   return {
     id: r.id,
     title: r.title,
-    summary: r.summary || '',
+    summary: r.summary || "",
     minutes: r.minutes ?? 3,
     tags: r.tags || [],
-    cover: normalizePath(r.cover_url || r.cover, '/images/edu/iv-therapy.jpg'),
+    // 🔧 use cover_url as the key the frontend expects
+    cover_url: normalizePath(
+      r.cover_url || r.cover,
+      "/images/edu/iv-therapy.jpg"
+    ),
     href: r.href || null,
-    isActive: r.is_active,
-    createdAt: r.created_at,
+    is_active: r.is_active,
+    created_at: r.created_at,
   };
 }
+
 function shapeVideo(r) {
   return {
     id: r.id,
     title: r.title,
-    duration: r.duration || '',
+    duration: r.duration || "",
     tags: r.tags || [],
-    thumb: normalizePath(r.thumb_url || r.thumb, '/images/edu/iv-therapy.jpg'),
+    // 🔧 use thumb_url as the key the frontend expects
+    thumb_url: normalizePath(
+      r.thumb_url || r.thumb,
+      "/images/edu/iv-therapy.jpg"
+    ),
     href: r.href || null,
-    isActive: r.is_active,
-    createdAt: r.created_at,
+    is_active: r.is_active,
+    created_at: r.created_at,
   };
 }
+
 function shapeDownload(r) {
   return {
     id: r.id,

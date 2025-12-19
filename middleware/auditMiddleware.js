@@ -1,106 +1,159 @@
-// middleware/auditMiddleware.js
-// IMPORTANT: Use dynamic require to avoid circular dependencies
-
-/**
- * Middleware to log all authenticated requests
- */
 const auditMiddleware = async (req, res, next) => {
-  // Store original send function
+  // PayPal requires the raw request body for signature verification.
+  // ANY access to req.body (even reading it) will break verification.
+  if (req.originalUrl.startsWith("/memberships/paypal")) {
+    return next();
+  }
   const originalSend = res.send;
   const originalJson = res.json;
-
-  // Capture response data
   let responseBody;
+  let auditLogged = false;
 
-  // Override send to capture response
-  res.send = function(body) {
+  res.send = function (body) {
     responseBody = body;
     return originalSend.call(this, body);
   };
 
-  res.json = function(body) {
+  res.json = function (body) {
     responseBody = body;
     return originalJson.call(this, body);
   };
 
-  // Log after response is sent
-  res.on('finish', async () => {
+  const cleanup = () => {
+    if (!auditLogged) {
+      res.removeListener('finish', logAudit);
+      res.removeListener('close', cleanup);
+      res.removeListener('error', cleanup);
+    }
+  };
+
+  const logAudit = async () => {
+    if (auditLogged) return;
+    auditLogged = true;
+
     try {
-      // Only log authenticated requests
-      if (req.user) {
-        const user = req.user;
-        const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-        const userAgent = req.headers['user-agent'];
+      if (!req.user) return;
 
-        // Determine event type based on route and method
-        let eventType = 'API_REQUEST';
-        let eventCategory = 'access';
-        let resourceType = getResourceType(req.path);
-        let resourceId = req.params.id || null;
+      const user = req.user;
+      const ipAddress = req.ip ||
+          req.headers['x-forwarded-for'] ||
+          req.connection.remoteAddress ||
+          req.socket.remoteAddress;
+      const userAgent = req.headers['user-agent'] || 'Unknown';
 
-        // Log based on HTTP method
-        if (req.method === 'GET') {
+      let eventType, eventCategory;
+      switch (req.method) {
+        case 'GET':
           eventType = 'DATA_ACCESS';
-        } else if (req.method === 'POST') {
+          eventCategory = 'access';
+          break;
+        case 'POST':
           eventType = 'DATA_CREATE';
           eventCategory = 'modification';
-        } else if (req.method === 'PUT' || req.method === 'PATCH') {
+          break;
+        case 'PUT':
+        case 'PATCH':
           eventType = 'DATA_UPDATE';
           eventCategory = 'modification';
-        } else if (req.method === 'DELETE') {
+          break;
+        case 'DELETE':
           eventType = 'DATA_DELETE';
           eventCategory = 'modification';
-        }
+          break;
+        default:
+          eventType = 'API_REQUEST';
+          eventCategory = 'access';
+      }
 
-        // Dynamically require AuditLogger to avoid circular dependencies
+      const resourceType = getResourceType(req.path);
+      const resourceId = req.params.id ||
+          req.body?.id ||
+          req.query?.id ||
+          null;
+      const resourceName = getResourceName(req.path, resourceId);
+
+      let errorMessage = null;
+      if (res.statusCode >= 400) {
+        if (typeof responseBody === 'string') {
+          try {
+            const parsed = JSON.parse(responseBody);
+            errorMessage = parsed.error || parsed.message || 'Request failed';
+          } catch {
+            errorMessage = responseBody || 'Request failed';
+          }
+        } else if (responseBody && typeof responseBody === 'object') {
+          errorMessage = responseBody.error || responseBody.message || 'Request failed';
+        } else {
+          errorMessage = 'Request failed';
+        }
+      }
+
+      const auditData = {
+        userId: user.id || user.sub || null,
+        userEmail: user.email || null,
+        userRole: user.role || 'user',
+        auth0UserId: user.sub || user.auth0_id || null,
+        eventType,
+        eventCategory,
+        eventDescription: `${req.method} ${req.path} - ${res.statusCode}`,
+        resourceType,
+        resourceId,
+        resourceName,
+        ipAddress: ipAddress ? ipAddress.split(',')[0].trim() : null,
+        userAgent,
+        status: res.statusCode >= 400 ? 'failure' : 'success',
+        errorMessage,
+        requestMethod: req.method,
+        requestPath: req.path,
+        responseCode: res.statusCode,
+        timestamp: new Date().toISOString()
+      };
+
+      if (process.env.NODE_ENV !== 'test') {
         try {
           const AuditLogger = require('../services/auditLogger');
-          await AuditLogger.log({
-            userId: user.id || user.sub,
-            userEmail: user.email,
-            userRole: user.role || 'user',
-            auth0UserId: user.sub || user.auth0_id,
-            eventType,
-            eventCategory,
-            eventDescription: `${req.method} ${req.path} - Status: ${res.statusCode}`,
-            resourceType,
-            resourceId,
-            resourceName: getResourceName(req.path, resourceId),
-            ipAddress,
-            userAgent,
-            status: res.statusCode >= 400 ? 'failure' : 'success',
-            errorMessage: res.statusCode >= 400 ? (responseBody?.error || responseBody?.message || 'Request failed') : null
-          });
-        } catch (auditError) {
-          // Only log if it's not a module not found error
-          if (!auditError.message.includes('Cannot find module')) {
-            console.error('Audit logging failed:', auditError);
+          await AuditLogger.log(auditData);
+        } catch (loggerError) {
+          if (!loggerError.message.includes('Cannot find module')) {
+            console.warn('Audit logging failed:', loggerError.message);
           }
         }
       }
     } catch (error) {
-      console.error('Audit middleware error:', error);
-      // Don't break the response
+      console.warn('Audit middleware processing error:', error.message);
+    } finally {
+      cleanup();
     }
-  });
+  };
+
+  res.on('finish', logAudit);
+  res.on('close', cleanup);
+  res.on('error', cleanup);
 
   next();
 };
 
-// Helper functions
 function getResourceType(path) {
-  if (path.includes('/api/patients')) return 'patient';
-  if (path.includes('/api/appointments')) return 'appointment';
-  if (path.includes('/api/medical-records')) return 'medical_record';
-  if (path.includes('/api/users')) return 'user';
-  if (path.includes('/api/newsletter')) return 'newsletter';
-  if (path.includes('/api/admin')) return 'admin';
-  if (path.includes('/api/audit')) return 'audit_log';
-  if (path.includes('/api/profile')) return 'profile';
-  if (path.includes('/api/catalog')) return 'catalog';
-  if (path.includes('/api/education')) return 'education';
-  if (path.includes('/api/blog')) return 'blog';
-  if (path.includes('/api/events')) return 'event';
+  const pathLower = path.toLowerCase();
+
+  if (pathLower.includes('/api/patients')) return 'patient';
+  if (pathLower.includes('/api/appointments')) return 'appointment';
+  if (pathLower.includes('/api/medical-records')) return 'medical_record';
+  if (pathLower.includes('/api/users')) return 'user';
+  if (pathLower.includes('/api/newsletter')) return 'newsletter';
+  if (pathLower.includes('/api/admin')) return 'admin';
+  if (pathLower.includes('/api/audit')) return 'audit_log';
+  if (pathLower.includes('/api/profile')) return 'profile';
+  if (pathLower.includes('/api/catalog')) return 'catalog';
+  if (pathLower.includes('/api/education')) return 'education';
+  if (pathLower.includes('/api/blog')) return 'blog';
+  if (pathLower.includes('/api/events')) return 'event';
+  if (pathLower.includes('/api/auth')) return 'auth';
+  if (pathLower.includes('/api/products')) return 'product';
+  if (pathLower.includes('/api/services')) return 'service';
+  if (pathLower.includes('/api/membership')) return 'membership';
+  if (pathLower.includes('/api/payments')) return 'payment';
+
   return 'system';
 }
 
@@ -111,10 +164,14 @@ function getResourceName(path, resourceId) {
     return `${resourceType}_${resourceId}`;
   }
 
-  // Extract resource name from path if possible
   const pathParts = path.split('/').filter(Boolean);
-  if (pathParts.length > 2) {
-    return pathParts.slice(-1)[0] || resourceType;
+
+  if (pathParts.length >= 3) {
+    const lastPart = pathParts[pathParts.length - 1];
+    if (!isNaN(lastPart) || lastPart.includes('-') || lastPart.length === 36) {
+      return `${resourceType}_${lastPart}`;
+    }
+    return lastPart;
   }
 
   return resourceType;

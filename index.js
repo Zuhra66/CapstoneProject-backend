@@ -1,7 +1,9 @@
+// server.js (or index.js)
 const express = require('express');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const csrf = require('csurf');
+const path = require('path');              // ✅ for static uploads
 require('dotenv').config();
 
 const { pool, healthCheck } = require('./db');
@@ -19,7 +21,9 @@ const eventsRoutes = require('./routes/events');
 const calendarRoutes = require('./routes/calendar');
 const membershipRoutes = require('./routes/memberships');
 const newsletterRoutes = require('./routes/newsletter');
-const auditLogsRoutes = require('./routes/auditLogs');  // NEW: Audit logs routes
+const auditLogsRoutes = require('./routes/auditLogs');
+
+
 
 // Import audit middleware
 const auditMiddleware = require('./middleware/auditMiddleware');  // NEW: Audit middleware
@@ -39,14 +43,28 @@ console.log('   Cookie Domain:', COOKIE_DOMAIN || 'localhost');
 app.set('trust proxy', 1);
 
 app.use(
-    helmet({
-      contentSecurityPolicy: false,
-      crossOriginEmbedderPolicy: false,
-    })
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    // ✅ Allow images and other static assets to be loaded from another origin
+    // (e.g., frontend on 5173, backend on 5001)
+    crossOriginResourcePolicy: false,
+  })
 );
+
+// PayPal Webhook 
+app.use("/memberships/paypal/webhook", express.raw({ type: "application/json" }));
 
 app.use(express.json());
 app.use(cookieParser());
+
+/* ---------- Static uploads (for event images etc.) ---------- */
+// ✅ serve /uploads/... from <project-root>/uploads
+//    (matches admin.js which writes to path.join(__dirname, 'uploads', 'events'))
+app.use(
+  '/uploads',
+  express.static(path.join(__dirname, 'uploads'))  // 🔁 using __dirname + 'uploads'
+);
 
 /* ---------- CORS Configuration ---------- */
 const allowedOrigins = [
@@ -69,12 +87,12 @@ const corsMiddleware = (req, res, next) => {
 
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader(
-      'Access-Control-Allow-Headers',
-      'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-XSRF-TOKEN, X-CSRF-Token, X-Internal-API-Key'
+    'Access-Control-Allow-Headers',
+    'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-XSRF-TOKEN, X-CSRF-Token, X-Internal-API-Key'
   );
   res.setHeader(
-      'Access-Control-Allow-Methods',
-      'GET, POST, PATCH, PUT, DELETE, OPTIONS'
+    'Access-Control-Allow-Methods',
+    'GET, POST, PATCH, PUT, DELETE, OPTIONS'
   );
 
   // Handle OPTIONS requests (preflight)
@@ -106,46 +124,44 @@ app.get('/debug/cookies', (req, res) => {
     cookies: req.cookies,
     headers: {
       origin: req.headers.origin,
-      cookie: req.headers.cookie
+      cookie: req.headers.cookie,
     },
     environment: {
       NODE_ENV: process.env.NODE_ENV,
-      cookieDomain: COOKIE_DOMAIN
-    }
+      cookieDomain: COOKIE_DOMAIN,
+    },
   });
 });
 
 /* ---------- CSRF Protection ---------- */
-// Create CSRF middleware instance
 const csrfProtection = csrf({
   cookie: {
     httpOnly: true,
-    sameSite: isProd ? 'none' : 'lax',  // 'none' for cross-origin subdomains
-    secure: isProd,                     // Must be true with sameSite: 'none'
-    domain: COOKIE_DOMAIN,              // Root domain for subdomain sharing
-    path: '/'
-  }
+    sameSite: isProd ? 'none' : 'lax', // 'none' for cross-origin subdomains
+    secure: isProd,                   // Must be true with sameSite: 'none'
+    domain: COOKIE_DOMAIN,            // Root domain for subdomain sharing
+    path: '/',
+  },
 });
 
 // Create a middleware that skips CSRF for specific routes
 const csrfSkipMiddleware = (req, res, next) => {
-  // Skip CSRF for these paths - CHECK FULL URL PATH
   const fullPath = req.originalUrl || req.url;
 
   if (
-      fullPath.startsWith('/internal') ||
-      fullPath.startsWith('/auth') ||
-      fullPath.startsWith('/api/blog') ||
-      fullPath.startsWith('/api/events') ||
-      fullPath === '/csrf-token' ||
-      fullPath === '/health' ||
-      fullPath === '/health/db' ||
-      fullPath === '/debug/cookies' ||
-      fullPath === '/' ||
-      fullPath.startsWith('/api/newsletter') ||
-      fullPath.startsWith('/api/audit') ||  // NEW: Skip CSRF for audit logs
-      fullPath.startsWith('/calendar') ||
-      fullPath.startsWith('/memberships')
+    fullPath.startsWith('/internal') ||
+    fullPath.startsWith('/auth') ||
+    fullPath.startsWith('/api/blog') ||
+    fullPath.startsWith('/api/events') ||        // public events API
+    fullPath === '/csrf-token' ||
+    fullPath === '/health' ||
+    fullPath === '/health/db' ||
+    fullPath === '/debug/cookies' ||
+    fullPath === '/' ||
+    fullPath.startsWith('/api/newsletter') ||
+    fullPath.startsWith('/api/audit') ||         // Skip CSRF for audit logs API
+    fullPath.startsWith('/calendar') ||
+    fullPath.startsWith('/memberships')
   ) {
     console.log(`🔓 Skipping CSRF for: ${fullPath}`);
     return next();
@@ -170,12 +186,12 @@ app.get('/csrf-token', csrfProtection, (req, res) => {
     sameSite: isProd ? 'none' : 'lax',
     secure: isProd,
     domain: COOKIE_DOMAIN,
-    path: '/'
+    path: '/',
   });
 
   res.json({
     csrfToken: token,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 });
 
@@ -184,26 +200,25 @@ app.post('/csrf-test', csrfProtection, (req, res) => {
   res.json({
     success: true,
     message: 'CSRF validation successful',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 });
 
 /* ---------- Apply audit middleware ---------- */
-// Apply audit middleware to all routes after authentication
-// Note: This should come AFTER CSRF but BEFORE routes
+// Note: This comes AFTER CSRF but BEFORE routes
 app.use(auditMiddleware);
 
 /* ---------- API routes ---------- */
-// Mount all API routes AFTER CSRF and audit middleware
 app.use('/api/newsletter', newsletterRoutes);
+app.use('/api/blog', blogRoutes);
 app.use('/internal', syncRoutes);
 app.use('/auth', authRoutes);
 app.use('/calendar', calendarRoutes);
 app.use('/api/blog', blogRoutes);
-app.use('/api/events', eventsRoutes);
+app.use('/api/events', eventsRoutes);   // public events routes (list for Events page)
 app.use('/memberships', membershipRoutes);
 app.use('/api/profile', profileRoutes);
-app.use('/api/admin', adminRoutes);
+app.use('/api/admin', adminRoutes);     // admin routes (includes /api/admin/events)
 app.use('/api', catalogRouter);
 app.use('/api/education', educationRouter);
 
@@ -218,7 +233,7 @@ app.use((err, req, res, next) => {
     message: err.message,
     path: req.path,
     originalUrl: req.originalUrl,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 
   if (err.name === 'UnauthorizedError') {
@@ -231,22 +246,22 @@ app.use((err, req, res, next) => {
       originalUrl: req.originalUrl,
       headers: {
         'x-xsrf-token': req.headers['x-xsrf-token'] ? 'present' : 'missing',
-        cookie: req.headers.cookie ? 'present' : 'missing'
+        cookie: req.headers.cookie ? 'present' : 'missing',
       },
-      cookies: req.cookies
+      cookies: req.cookies,
     });
 
     return res.status(403).json({
       error: 'Invalid CSRF token',
       details: 'Please refresh the page',
-      path: req.originalUrl
+      path: req.originalUrl,
     });
   }
 
   res.status(err.status || 500).json({
     error: 'Server error',
     details: isProd ? 'Internal server error' : err.message,
-    path: req.originalUrl
+    path: req.originalUrl,
   });
 });
 
