@@ -1,7 +1,7 @@
 # EmpowerMedWellness
 EmpowerMedWellness is a holistic health platform offering services, memberships, events, educational resources, and wellness products. The site helps individuals enhance their mental, emotional, spiritual, and physical well-being through expert guidance, evidence-based tools, and supportive community programs providing a comprehensive path toward balanced, sustainable wellness.
 
-#Authors
+# Authors
 
 Zuhra Totakhail
 
