@@ -1,4 +1,3 @@
-// routes/auditLogs.js - COMPLETE WORKING VERSION
 const express = require('express');
 const router = express.Router();
 const AuditLogger = require('../services/auditLogger');
@@ -72,8 +71,8 @@ router.get('/logs', checkJwt, attachAdminUser, requireAdmin, async (req, res) =>
       search
     }, pageNum, limitNum);
 
-    console.log(` [GET /logs] Retrieved ${logs.logs?.length || 0} audit logs`);
-    console.log(`[GET /logs] Total items in pagination: ${logs.pagination?.totalItems || 0}`);
+    console.log(`✅ [GET /logs] Retrieved ${logs.logs?.length || 0} audit logs`);
+    console.log(`✅ [GET /logs] Total items in pagination: ${logs.pagination?.totalItems || 0}`);
 
     // Try to log this access (but don't fail if it doesn't work)
     try {

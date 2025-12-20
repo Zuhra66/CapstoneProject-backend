@@ -19,23 +19,23 @@ class AuditLogger {
       }
 
       const query = `
-        INSERT INTO audit_logs (
-          user_id,
-          user_email,
-          auth0_user_id,
-          user_role,
-          action,
-          event_category,
-          entity_type,
-          entity_id,
-          resource_name,
-          status,
-          ip_address,
-          user_agent,
-          meta,
-          created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
-        RETURNING id, created_at;
+          INSERT INTO audit_logs (
+              user_id,
+              user_email,
+              auth0_user_id,
+              user_role,
+              action,
+              event_category,
+              entity_type,
+              entity_id,
+              resource_name,
+              status,
+              ip_address,
+              user_agent,
+              meta,
+              created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+              RETURNING id, created_at;
       `;
 
       const values = [
@@ -164,26 +164,26 @@ class AuditLogger {
       const paginationParams = [...params, limit, offset];
 
       const query = `
-        SELECT 
-          id,
-          user_id,
-          user_email,
-          user_role,
-          auth0_user_id,
-          action as event_type,
-          event_category,
-          entity_type as resource_type,
-          entity_id as resource_id,
-          resource_name,
-          status,
-          ip_address,
-          user_agent,
-          meta as additional_data,
-          created_at
-        FROM audit_logs 
-        ${whereClause}
-        ORDER BY created_at DESC 
-        LIMIT $${paramCount} OFFSET $${paramCount + 1}
+          SELECT
+              id,
+              user_id,
+              user_email,
+              user_role,
+              auth0_user_id,
+              action as event_type,
+              event_category,
+              entity_type as resource_type,
+              entity_id as resource_id,
+              resource_name,
+              status,
+              ip_address,
+              user_agent,
+              meta as additional_data,
+              created_at
+          FROM audit_logs
+              ${whereClause}
+          ORDER BY created_at DESC
+              LIMIT $${paramCount} OFFSET $${paramCount + 1}
       `;
 
       console.log('🔍 [getLogs DEBUG] Main query:', query);
@@ -292,17 +292,17 @@ class AuditLogger {
       }
 
       const query = `
-      INSERT INTO admin_audit_logs (
-        admin_user_id, 
-        action_type, 
-        target_user_id, 
-        details, 
-        ip_address, 
-        user_agent, 
-        created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, NOW())
-      RETURNING id
-    `;
+          INSERT INTO admin_audit_logs (
+              admin_user_id,
+              action_type,
+              target_user_id,
+              details,
+              ip_address,
+              user_agent,
+              created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, NOW())
+              RETURNING id
+      `;
 
       const values = [
         adminUser.id,
@@ -675,25 +675,25 @@ class AuditLogger {
   static async getLogById(logId) {
     try {
       const query = `
-        SELECT 
-          id,
-          user_id,
-          user_email,
-          user_role,
-          auth0_user_id,
-          action as event_type,
-          event_category,
-          entity_type as resource_type,
-          entity_id as resource_id,
-          resource_name,
-          ip_address,
-          user_agent,
-          meta as metadata,
-          status,
-          error_message,
-          created_at
-        FROM audit_logs 
-        WHERE id = $1
+          SELECT
+              id,
+              user_id,
+              user_email,
+              user_role,
+              auth0_user_id,
+              action as event_type,
+              event_category,
+              entity_type as resource_type,
+              entity_id as resource_id,
+              resource_name,
+              ip_address,
+              user_agent,
+              meta as metadata,
+              status,
+              error_message,
+              created_at
+          FROM audit_logs
+          WHERE id = $1
       `;
 
       const result = await pool.query(query, [logId]);
@@ -723,66 +723,66 @@ class AuditLogger {
     try {
       // Summary statistics
       const summaryQuery = `
-        SELECT 
-          COALESCE(event_category, 'uncategorized') as event_category,
-          COALESCE(status, 'unknown') as status,
-          COUNT(*) as count
-        FROM audit_logs
-        WHERE created_at BETWEEN $1 AND $2
-        GROUP BY event_category, status
-        ORDER BY event_category, status
+          SELECT
+              COALESCE(event_category, 'uncategorized') as event_category,
+              COALESCE(status, 'unknown') as status,
+              COUNT(*) as count
+          FROM audit_logs
+          WHERE created_at BETWEEN $1 AND $2
+          GROUP BY event_category, status
+          ORDER BY event_category, status
       `;
 
       // User activity summary
       const userActivityQuery = `
-        SELECT 
-          user_email,
-          user_role,
-          COUNT(*) as total_events,
-          COUNT(CASE WHEN status = 'failure' THEN 1 END) as failed_events,
-          COUNT(CASE WHEN event_category = 'access' THEN 1 END) as access_events,
-          COUNT(CASE WHEN event_category = 'modification' THEN 1 END) as modification_events,
-          MIN(created_at) as first_activity,
-          MAX(created_at) as last_activity
-        FROM audit_logs
-        WHERE created_at BETWEEN $1 AND $2
-          AND user_email IS NOT NULL
-        GROUP BY user_email, user_role
-        ORDER BY total_events DESC
-        LIMIT 50
+          SELECT
+              user_email,
+              user_role,
+              COUNT(*) as total_events,
+              COUNT(CASE WHEN status = 'failure' THEN 1 END) as failed_events,
+              COUNT(CASE WHEN event_category = 'access' THEN 1 END) as access_events,
+              COUNT(CASE WHEN event_category = 'modification' THEN 1 END) as modification_events,
+              MIN(created_at) as first_activity,
+              MAX(created_at) as last_activity
+          FROM audit_logs
+          WHERE created_at BETWEEN $1 AND $2
+            AND user_email IS NOT NULL
+          GROUP BY user_email, user_role
+          ORDER BY total_events DESC
+              LIMIT 50
       `;
 
       // Security incidents
       const securityQuery = `
-        SELECT 
-          id,
-          action as event_type,
-          user_email,
-          ip_address,
-          created_at,
-          error_message
-        FROM audit_logs
-        WHERE created_at BETWEEN $1 AND $2
-          AND event_category = 'security'
-          AND status IN ('failure', 'warning')
-        ORDER BY created_at DESC
-        LIMIT 100
+          SELECT
+              id,
+              action as event_type,
+              user_email,
+              ip_address,
+              created_at,
+              error_message
+          FROM audit_logs
+          WHERE created_at BETWEEN $1 AND $2
+            AND event_category = 'security'
+            AND status IN ('failure', 'warning')
+          ORDER BY created_at DESC
+              LIMIT 100
       `;
 
       // Most accessed resources
       const resourcesQuery = `
-        SELECT 
-          entity_type as resource_type,
-          resource_name,
-          COUNT(*) as access_count,
-          COUNT(DISTINCT user_email) as unique_users
-        FROM audit_logs
-        WHERE created_at BETWEEN $1 AND $2
-          AND entity_type IS NOT NULL
-          AND event_category IN ('access', 'modification')
-        GROUP BY entity_type, resource_name
-        ORDER BY access_count DESC
-        LIMIT 20
+          SELECT
+              entity_type as resource_type,
+              resource_name,
+              COUNT(*) as access_count,
+              COUNT(DISTINCT user_email) as unique_users
+          FROM audit_logs
+          WHERE created_at BETWEEN $1 AND $2
+            AND entity_type IS NOT NULL
+            AND event_category IN ('access', 'modification')
+          GROUP BY entity_type, resource_name
+          ORDER BY access_count DESC
+              LIMIT 20
       `;
 
       const [summaryResult, userActivityResult, securityResult, resourcesResult] = await Promise.all([
@@ -854,9 +854,9 @@ class AuditLogger {
   static async cleanupExpiredLogs() {
     try {
       const query = `
-        DELETE FROM audit_logs 
-        WHERE expires_at < NOW()
-        RETURNING COUNT(*) as deleted_count
+          DELETE FROM audit_logs
+          WHERE expires_at < NOW()
+              RETURNING COUNT(*) as deleted_count
       `;
 
       const result = await pool.query(query);
@@ -982,20 +982,20 @@ class AuditLogger {
       const paginationParams = [...params, limit, offset];
 
       const query = `
-      SELECT 
-        id,
-        admin_user_id,
-        action_type,
-        target_user_id,
-        details,
-        ip_address,
-        user_agent,
-        created_at
-      FROM admin_audit_logs 
-      ${whereClause}
-      ORDER BY created_at DESC 
-      LIMIT $${paramCount} OFFSET $${paramCount + 1}
-    `;
+          SELECT
+              id,
+              admin_user_id,
+              action_type,
+              target_user_id,
+              details,
+              ip_address,
+              user_agent,
+              created_at
+          FROM admin_audit_logs
+                   ${whereClause}
+          ORDER BY created_at DESC
+              LIMIT $${paramCount} OFFSET $${paramCount + 1}
+      `;
 
       console.log('🔍 [getAdminLogs IMPROVED] Main query:', query);
       console.log('🔍 [getAdminLogs IMPROVED] Query params:', paginationParams);
@@ -1165,7 +1165,7 @@ class AuditLogger {
         }
       }
 
-      console.log(`✅ [getAdminLogs IMPROVED] Successfully processed ${logs.length} logs`);
+      console.log(` [getAdminLogs IMPROVED] Successfully processed ${logs.length} logs`);
 
       return {
         logs,
