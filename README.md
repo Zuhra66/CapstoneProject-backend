@@ -29,3 +29,12 @@ Maria Imperatrice
 # ER -Diagram
 <img width="2249" height="2186" alt="EmpowermedDatabase" src="https://github.com/user-attachments/assets/3884f69f-1aee-4468-88e8-4f0551d0de4c" />
 
+# License
+
+Academic Capstone Project – Fall 2025
+California State University, Monterey Bay
+
+This project has been created for:
+Client
+Dr. Diana
+
