@@ -1,1040 +1,872 @@
-const { pool } = require('../db');
+// routes/auditLogs.js - COMPLETE WORKING VERSION
+const express = require('express');
+const router = express.Router();
+const AuditLogger = require('../services/auditLogger');
+const { checkJwt, attachAdminUser, requireAdmin } = require('../middleware/admin-check');
 
-class AuditLogger {
-  static async log(event) {
-    try {
-      let userId = event.userId;
+/**
+ * GET /api/audit/logs - Get audit logs (Admin only)
+ * Now uses enhanced audit_logs table
+ */
+// routes/auditLogs.js - Update the main /logs route
+router.get('/logs', checkJwt, attachAdminUser, requireAdmin, async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 50,
+      userId,
+      userEmail,
+      eventType,
+      eventCategory,
+      resourceType,
+      resourceId,
+      startDate,
+      endDate,
+      status,
+      search
+    } = req.query;
 
-      if (userId && userId.includes('google-oauth2|')) {
-        userId = null;
-      }
+    console.log('🔍 [GET /logs] Request received with query:', req.query);
 
-      const query = `
-        INSERT INTO audit_logs (
-          user_id,
-          user_email,
-          auth0_user_id,
-          user_role,
-          action,
-          event_category,
-          entity_type,
-          entity_id,
-          resource_name,
-          status,
-          ip_address,
-          user_agent,
-          meta,
-          created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
-        RETURNING id, created_at;
-      `;
+    // Validate input
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
 
-      const values = [
-        userId,
-        event.userEmail,
-        event.auth0UserId || event.userId,
-        event.userRole,
-        event.eventType,
-        event.eventCategory,
-        event.resourceType,
-        event.resourceId,
-        event.resourceName,
-        event.status || 'success',
-        event.ipAddress,
-        event.userAgent,
-        event.additionalData ? JSON.stringify(event.additionalData) : null
-      ];
-
-      const result = await pool.query(query, values);
-      return result.rows[0];
-
-    } catch (error) {
-      throw error;
-    }
-  }
-
-  static async getLogs(filters = {}, page = 1, limit = 50) {
-    try {
-      const offset = (page - 1) * limit;
-
-      const whereConditions = [];
-      const params = [];
-      let paramCount = 1;
-
-      if (filters.userId) {
-        whereConditions.push(`user_id = $${paramCount}`);
-        params.push(filters.userId);
-        paramCount++;
-      }
-
-      if (filters.userEmail) {
-        whereConditions.push(`user_email ILIKE $${paramCount}`);
-        params.push(`%${filters.userEmail}%`);
-        paramCount++;
-      }
-
-      if (filters.eventType) {
-        whereConditions.push(`action ILIKE $${paramCount}`);
-        params.push(`%${filters.eventType}%`);
-        paramCount++;
-      }
-
-      if (filters.eventCategory) {
-        whereConditions.push(`event_category = $${paramCount}`);
-        params.push(filters.eventCategory);
-        paramCount++;
-      }
-
-      if (filters.resourceType) {
-        whereConditions.push(`entity_type = $${paramCount}`);
-        params.push(filters.resourceType);
-        paramCount++;
-      }
-
-      if (filters.resourceId) {
-        whereConditions.push(`entity_id = $${paramCount}`);
-        params.push(filters.resourceId);
-        paramCount++;
-      }
-
-      if (filters.startDate) {
-        whereConditions.push(`DATE(created_at) >= $${paramCount}`);
-        params.push(filters.startDate);
-        paramCount++;
-      }
-
-      if (filters.endDate) {
-        whereConditions.push(`DATE(created_at) <= $${paramCount}`);
-        params.push(filters.endDate);
-        paramCount++;
-      }
-
-      if (filters.status) {
-        whereConditions.push(`status = $${paramCount}`);
-        params.push(filters.status);
-        paramCount++;
-      }
-
-      if (filters.search) {
-        whereConditions.push(`(
-          user_email ILIKE $${paramCount} OR
-          action ILIKE $${paramCount} OR
-          entity_type ILIKE $${paramCount} OR
-          resource_name ILIKE $${paramCount}
-        )`);
-        params.push(`%${filters.search}%`);
-        paramCount++;
-      }
-
-      const whereClause = whereConditions.length > 0
-          ? `WHERE ${whereConditions.join(' AND ')}`
-          : '';
-
-      const countQuery = `SELECT COUNT(*) as total FROM audit_logs ${whereClause}`;
-      const countResult = await pool.query(countQuery, params);
-      const totalItems = parseInt(countResult.rows[0].total);
-
-      const paginationParams = [...params, limit, offset];
-
-      const query = `
-        SELECT 
-          id,
-          user_id,
-          user_email,
-          user_role,
-          auth0_user_id,
-          action as event_type,
-          event_category,
-          entity_type as resource_type,
-          entity_id as resource_id,
-          resource_name,
-          status,
-          ip_address,
-          user_agent,
-          meta as additional_data,
-          created_at
-        FROM audit_logs 
-        ${whereClause}
-        ORDER BY created_at DESC 
-        LIMIT $${paramCount} OFFSET $${paramCount + 1}
-      `;
-
-      const result = await pool.query(query, paginationParams);
-
-      return {
-        logs: result.rows,
-        pagination: {
-          currentPage: page,
-          totalPages: Math.ceil(totalItems / limit),
-          totalItems,
-          itemsPerPage: limit
-        }
-      };
-
-    } catch (error) {
-      return {
-        logs: [],
-        pagination: {
-          currentPage: page,
-          totalPages: 1,
-          totalItems: 0,
-          itemsPerPage: limit
-        }
-      };
-    }
-  }
-
-  static async logAdminAction(adminUser, actionType, targetUser = null, resource = null, details = {}, ipAddress = null, userAgent = null) {
-    try {
-      let adminEmail = adminUser.email || 'unknown@empowermed.com';
-
-      if (!adminEmail || adminEmail === 'unknown@empowermed.com') {
-        try {
-          const userQuery = await pool.query(
-              'SELECT email, first_name, last_name FROM users WHERE id = $1',
-              [adminUser.id]
-          );
-          if (userQuery.rows.length > 0) {
-            adminEmail = userQuery.rows[0].email;
-          }
-        } catch (emailError) {
-        }
-      }
-
-      const enhancedDetails = {
-        ...details,
-        admin_email: adminEmail,
-        admin_name: adminUser.name || `${adminUser.first_name || ''} ${adminUser.last_name || ''}`.trim(),
-        action_timestamp: new Date().toISOString(),
-        ip_address: ipAddress,
-        user_agent: userAgent
-      };
-
-      if (targetUser) {
-        enhancedDetails.target_user_id = targetUser.id;
-        enhancedDetails.target_email = targetUser.email;
-        enhancedDetails.target_name = targetUser.name || `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim();
-      }
-
-      if (resource) {
-        enhancedDetails.resource_type = resource.type;
-        enhancedDetails.resource_id = resource.id;
-        enhancedDetails.resource_name = resource.name;
-      }
-
-      if (actionType.includes('USER_')) {
-        enhancedDetails.resource_type = 'user';
-      } else if (actionType.includes('PATIENT_')) {
-        enhancedDetails.resource_type = 'patient';
-      } else if (actionType.includes('APPOINTMENT_')) {
-        enhancedDetails.resource_type = 'appointment';
-      } else if (actionType.includes('DOCUMENT_')) {
-        enhancedDetails.resource_type = 'document';
-      }
-
-      const query = `
-      INSERT INTO admin_audit_logs (
-        admin_user_id, 
-        action_type, 
-        target_user_id, 
-        details, 
-        ip_address, 
-        user_agent, 
-        created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, NOW())
-      RETURNING id
-    `;
-
-      const values = [
-        adminUser.id,
-        actionType,
-        targetUser ? targetUser.id : null,
-        JSON.stringify(enhancedDetails),
-        ipAddress,
-        userAgent
-      ];
-
-      const result = await pool.query(query, values);
-      return result.rows[0];
-    } catch (error) {
-      return null;
-    }
-  }
-
-  static async logLogin(user, ipAddress, userAgent, status = 'success', error = null) {
-    try {
-      return await AuditLogger.log({
-        userId: user?.id || user?.sub,
-        userEmail: user?.email,
-        userRole: user?.role || 'user',
-        auth0UserId: user?.sub || user?.auth0_id,
-        eventType: 'USER_LOGIN',
-        eventCategory: 'authentication',
-        eventDescription: `User login ${status}`,
-        resourceType: 'user',
-        resourceId: user?.id || user?.sub,
-        resourceName: user?.email || 'unknown',
-        ipAddress,
-        userAgent,
-        status,
-        errorMessage: error?.message
+    if (isNaN(pageNum) || pageNum < 1) {
+      console.log('❌ [GET /logs] Invalid page number:', page);
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid page number'
       });
+    }
+
+    if (isNaN(limitNum) || limitNum < 1 || limitNum > 500) {
+      console.log('❌ [GET /logs] Invalid limit:', limit);
+      return res.status(400).json({
+        success: false,
+        error: 'Limit must be between 1 and 500'
+      });
+    }
+
+    console.log('🔍 [GET /logs] Calling AuditLogger.getLogs() with:', {
+      eventCategory,
+      status,
+      startDate,
+      endDate,
+      search,
+      page: pageNum,
+      limit: limitNum
+    });
+
+    // Get logs from enhanced table
+    const logs = await AuditLogger.getLogs({
+      userId,
+      userEmail,
+      eventType,
+      eventCategory,
+      resourceType,
+      resourceId,
+      startDate,
+      endDate,
+      status,
+      search
+    }, pageNum, limitNum);
+
+    console.log(` [GET /logs] Retrieved ${logs.logs?.length || 0} audit logs`);
+    console.log(`[GET /logs] Total items in pagination: ${logs.pagination?.totalItems || 0}`);
+
+    // Try to log this access (but don't fail if it doesn't work)
+    try {
+      await AuditLogger.logAccess(
+          req.adminUser,
+          'audit_log',
+          null,
+          'Audit Logs',
+          'view',
+          req.ip,
+          req.headers['user-agent']
+      );
     } catch (logError) {
+      console.warn('⚠️ [GET /logs] Failed to log access:', logError.message);
     }
-  }
 
-  static async logLogout(user, ipAddress, userAgent) {
-    try {
-      return await AuditLogger.log({
-        userId: user?.id || user?.sub,
-        userEmail: user?.email,
-        userRole: user?.role,
-        auth0UserId: user?.sub || user?.auth0_id,
-        eventType: 'USER_LOGOUT',
-        eventCategory: 'authentication',
-        eventDescription: 'User logged out',
-        resourceType: 'user',
-        resourceId: user?.id || user?.sub,
-        resourceName: user?.email,
-        ipAddress,
-        userAgent,
-        status: 'success'
-      });
-    } catch (error) {
-    }
-  }
+    res.json({
+      success: true,
+      ...logs,
+      message: `Retrieved ${logs.logs?.length || 0} audit logs`
+    });
 
-  static async logLoginAttempt(user, success, ipAddress, userAgent, error = null) {
+  } catch (error) {
+    console.error('❌ [GET /logs] Get audit logs error:', error);
+    console.error('❌ [GET /logs] Error stack:', error.stack);
+
+    // Try to log the error (but don't fail if it doesn't work)
     try {
-      return await AuditLogger.log({
-        userId: user?.id || user?.sub,
-        userEmail: user?.email,
-        userRole: user?.role || 'user',
-        auth0UserId: user?.sub || user?.auth0_id,
-        eventType: success ? 'USER_LOGIN' : 'LOGIN_FAILURE',
-        eventCategory: 'authentication',
-        eventDescription: success ? 'User login successful' : `Login failed: ${error?.message || 'Invalid credentials'}`,
-        resourceType: 'user',
-        resourceId: user?.id || user?.sub,
-        resourceName: user?.email || 'unknown',
-        ipAddress,
-        userAgent,
-        status: success ? 'success' : 'failure',
-        errorMessage: error?.message
-      });
+      await AuditLogger.logSecurityEvent(
+          req.adminUser,
+          'AUDIT_LOG_ERROR',
+          `Failed to retrieve audit logs: ${error.message}`,
+          'medium',
+          req.ip,
+          req.headers['user-agent']
+      );
     } catch (logError) {
+      console.error('❌ [GET /logs] Failed to log error:', logError);
     }
-  }
 
-  static async logUserManagement(adminUser, action, targetUser, changes = {}, ipAddress = null, userAgent = null) {
-    const actionType = `USER_${action.toUpperCase()}`;
-    const details = {
-      action: action,
-      target_user_email: targetUser.email,
-      target_user_name: `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim(),
-      changes: changes,
-      operation: `${action} user`
+    res.status(500).json({
+      success: false,
+      error: 'Failed to retrieve audit logs',
+      details: process.env.NODE_ENV === 'development' ? {
+        message: error.message,
+        stack: error.stack
+      } : undefined
+    });
+  }
+});
+router.get('/admin', checkJwt, attachAdminUser, requireAdmin, async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 10,
+      actionType = '',
+      adminEmail = '',
+      targetEmail = '',
+      startDate = '',
+      endDate = '',
+      search = ''
+    } = req.query;
+
+    console.log('🔍 [API /admin] Query params:', req.query);
+
+    const filters = {
+      actionType,
+      adminEmail,
+      targetEmail,
+      startDate,
+      endDate,
+      search
     };
 
-    return await AuditLogger.logAdminAction(
-        adminUser,
-        actionType,
-        targetUser,
-        { type: 'user', id: targetUser.id, name: targetUser.email },
-        details,
-        ipAddress,
-        userAgent
-    );
-  }
+    const result = await AuditLogger.getAdminLogs(filters, parseInt(page), parseInt(limit));
 
-  static async logUserCreate(adminUser, targetUser, userData, ipAddress = null, userAgent = null) {
-    return await AuditLogger.logUserManagement(
-        adminUser,
-        'CREATE',
-        targetUser,
-        {
-          new_user_data: {
-            email: targetUser.email,
-            first_name: targetUser.first_name,
-            last_name: targetUser.last_name,
-            role: targetUser.role,
-            is_active: targetUser.is_active
-          },
-          provided_data: userData
-        },
-        ipAddress,
-        userAgent
-    );
-  }
+    console.log(`✅ [API /admin] Returning ${result.logs.length} admin logs, total: ${result.pagination.totalItems}`);
 
-  static async logUserUpdate(adminUser, targetUser, oldData, newData, ipAddress = null, userAgent = null) {
-    const changes = {};
+    // Format response for frontend
+    const formattedLogs = result.logs.map(log => ({
+      id: log.id,
+      timestamp: log.created_at,
+      user: log.user || log.admin_email, // Use user field for display
+      action: log.action_type,
+      target: log.target || 'N/A',
+      resource: log.resource || 'System',
+      details: log.details,
+      ipAddress: log.ip_address,
+      userAgent: log.user_agent,
+      // Additional fields for frontend if needed
+      adminEmail: log.admin_email,
+      adminName: log.admin_name,
+      targetEmail: log.target_email,
+      targetName: log.target_name,
+      resourceType: log.resource_type,
+      resourceName: log.resource_name,
+      resourceId: log.resource_id
+    }));
 
-    if (oldData.email !== newData.email) {
-      changes.email = { from: oldData.email, to: newData.email };
-    }
-    if (oldData.first_name !== newData.first_name) {
-      changes.first_name = { from: oldData.first_name, to: newData.first_name };
-    }
-    if (oldData.last_name !== newData.last_name) {
-      changes.last_name = { from: oldData.last_name, to: newData.last_name };
-    }
-    if (oldData.role !== newData.role) {
-      changes.role = { from: oldData.role, to: newData.role };
-    }
-    if (oldData.is_active !== newData.is_active) {
-      changes.is_active = { from: oldData.is_active, to: newData.is_active };
-    }
-
-    return await AuditLogger.logUserManagement(
-        adminUser,
-        'UPDATE',
-        targetUser,
-        {
-          old_data: oldData,
-          new_data: newData,
-          changes: changes
-        },
-        ipAddress,
-        userAgent
-    );
-  }
-
-  static async logUserDelete(adminUser, targetUser, ipAddress = null, userAgent = null) {
-    return await AuditLogger.logUserManagement(
-        adminUser,
-        'DELETE',
-        targetUser,
-        {
-          deleted_user_data: {
-            email: targetUser.email,
-            first_name: targetUser.first_name,
-            last_name: targetUser.last_name,
-            role: targetUser.role,
-            id: targetUser.id
-          }
-        },
-        ipAddress,
-        userAgent
-    );
-  }
-
-  static async logUserStatusChange(adminUser, targetUser, oldStatus, newStatus, reason = null, ipAddress = null, userAgent = null) {
-    return await AuditLogger.logUserManagement(
-        adminUser,
-        'STATUS_CHANGE',
-        targetUser,
-        {
-          status_change: {
-            from: oldStatus,
-            to: newStatus,
-            reason: reason
-          }
-        },
-        ipAddress,
-        userAgent
-    );
-  }
-
-  static async logUserRoleChange(adminUser, targetUser, oldRole, newRole, ipAddress = null, userAgent = null) {
-    return await AuditLogger.logUserManagement(
-        adminUser,
-        'ROLE_CHANGE',
-        targetUser,
-        {
-          role_change: {
-            from: oldRole,
-            to: newRole
-          }
-        },
-        ipAddress,
-        userAgent
-    );
-  }
-
-  static async logUserPasswordReset(adminUser, targetUser, ipAddress = null, userAgent = null) {
-    return await AuditLogger.logUserManagement(
-        adminUser,
-        'PASSWORD_RESET',
-        targetUser,
-        {
-          action: 'admin_password_reset'
-        },
-        ipAddress,
-        userAgent
-    );
-  }
-
-  static async logAccess(adminUser, resourceType, resourceId, resourceName, action, ipAddress = null, userAgent = null) {
-    try {
-      return await AuditLogger.log({
-        userId: adminUser.id,
-        userEmail: adminUser.email,
-        auth0UserId: adminUser.auth0_id,
-        userRole: adminUser.role,
-        eventType: `${resourceType.toUpperCase()}_${action.toUpperCase()}`,
-        eventCategory: 'access',
-        resourceType: resourceType,
-        resourceId: resourceId,
-        resourceName: resourceName,
-        status: 'success',
-        ipAddress: ipAddress,
-        userAgent: userAgent
-      });
-    } catch (error) {
-    }
-  }
-
-  static async logDataModification(user, resourceType, resourceId, resourceName, action, oldValue, newValue, changes) {
-    try {
-      return await AuditLogger.log({
-        userId: user?.id || user?.sub,
-        userEmail: user?.email,
-        userRole: user?.role,
-        auth0UserId: user?.sub || user?.auth0_id,
-        eventType: `DATA_${action.toUpperCase()}`,
-        eventCategory: 'modification',
-        eventDescription: `User ${action}d ${resourceType}: ${resourceName}`,
-        resourceType,
-        resourceId,
-        resourceName,
-        oldValue,
-        newValue,
-        changes,
-        status: 'success'
-      });
-    } catch (error) {
-    }
-  }
-
-  static async logCreate(user, resourceType, resourceId, resourceName, newValue) {
-    try {
-      return await AuditLogger.logDataModification(user, resourceType, resourceId, resourceName, 'create', null, newValue, null);
-    } catch (error) {
-    }
-  }
-
-  static async logUpdate(user, resourceType, resourceId, resourceName, oldValue, newValue, changes) {
-    try {
-      return await AuditLogger.logDataModification(user, resourceType, resourceId, resourceName, 'update', oldValue, newValue, changes);
-    } catch (error) {
-    }
-  }
-
-  static async logDelete(user, resourceType, resourceId, resourceName, oldValue) {
-    try {
-      return await AuditLogger.logDataModification(user, resourceType, resourceId, resourceName, 'delete', oldValue, null, null);
-    } catch (error) {
-    }
-  }
-
-  static async logSecurityEvent(user, eventType, description, severity = 'medium', ipAddress = null, userAgent = null) {
-    try {
-      return await AuditLogger.log({
-        userId: user?.id || user?.sub,
-        userEmail: user?.email,
-        userRole: user?.role,
-        auth0UserId: user?.sub || user?.auth0_id,
-        eventType: `SECURITY_${eventType}`,
-        eventCategory: 'security',
-        eventDescription: description,
-        resourceType: 'system',
-        ipAddress,
-        userAgent,
-        status: severity === 'high' ? 'failure' : 'warning'
-      });
-    } catch (error) {
-    }
-  }
-
-  static async logSystemEvent(eventType, description, details = null) {
-    try {
-      return await AuditLogger.log({
-        userId: null,
-        userEmail: null,
-        userRole: null,
-        auth0UserId: null,
-        eventType: `SYSTEM_${eventType}`,
-        eventCategory: 'system',
-        eventDescription: description,
-        resourceType: 'system',
-        additionalData: details || {}
-      });
-    } catch (error) {
-    }
-  }
-
-  static async getLogById(logId) {
-    try {
-      const query = `
-        SELECT 
-          id,
-          user_id,
-          user_email,
-          user_role,
-          auth0_user_id,
-          action as event_type,
-          event_category,
-          entity_type as resource_type,
-          entity_id as resource_id,
-          resource_name,
-          ip_address,
-          user_agent,
-          meta as metadata,
-          status,
-          error_message,
-          created_at
-        FROM audit_logs 
-        WHERE id = $1
-      `;
-
-      const result = await pool.query(query, [logId]);
-
-      if (result.rows.length === 0) {
-        return null;
+    res.json({
+      success: true,
+      logs: formattedLogs,
+      pagination: {
+        total: result.pagination.totalItems,
+        page: result.pagination.currentPage,
+        totalPages: result.pagination.totalPages,
+        limit: parseInt(limit)
       }
+    });
 
-      const log = result.rows[0];
-
-      return {
-        ...log,
-        metadata: log.metadata ? JSON.parse(log.metadata) : {}
-      };
-
-    } catch (error) {
-      throw new Error(`Failed to get audit log: ${error.message}`);
-    }
+  } catch (error) {
+    console.error('❌ [API /admin] Error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
+});
+router.get('/test-admin-logs', checkJwt, attachAdminUser, requireAdmin, async (req, res) => {
+  try {
+    const { pool } = require('../db');
 
-  static async generateComplianceReport(startDate, endDate) {
-    try {
-      const summaryQuery = `
-        SELECT 
-          COALESCE(event_category, 'uncategorized') as event_category,
-          COALESCE(status, 'unknown') as status,
-          COUNT(*) as count
-        FROM audit_logs
-        WHERE created_at BETWEEN $1 AND $2
-        GROUP BY event_category, status
-        ORDER BY event_category, status
-      `;
+    // Test 1: Get sample admin logs
+    const sampleQuery = await pool.query(`
+      SELECT 
+        al.id,
+        al.admin_user_id,
+        u.email as admin_email,
+        al.action_type,
+        al.target_user_id,
+        (
+          SELECT email 
+          FROM users 
+          WHERE id = al.target_user_id
+        ) as target_email,
+        al.details,
+        al.created_at
+      FROM admin_audit_logs al
+      LEFT JOIN users u ON al.admin_user_id = u.id::uuid
+      ORDER BY al.created_at DESC 
+      LIMIT 5
+    `);
 
-      const userActivityQuery = `
-        SELECT 
-          user_email,
-          user_role,
-          COUNT(*) as total_events,
-          COUNT(CASE WHEN status = 'failure' THEN 1 END) as failed_events,
-          COUNT(CASE WHEN event_category = 'access' THEN 1 END) as access_events,
-          COUNT(CASE WHEN event_category = 'modification' THEN 1 END) as modification_events,
-          MIN(created_at) as first_activity,
-          MAX(created_at) as last_activity
-        FROM audit_logs
-        WHERE created_at BETWEEN $1 AND $2
-          AND user_email IS NOT NULL
-        GROUP BY user_email, user_role
-        ORDER BY total_events DESC
-        LIMIT 50
-      `;
+    // Test 2: Count logs
+    const countQuery = await pool.query('SELECT COUNT(*) as total FROM admin_audit_logs');
 
-      const securityQuery = `
-        SELECT 
-          id,
-          action as event_type,
-          user_email,
-          ip_address,
-          created_at,
-          error_message
-        FROM audit_logs
-        WHERE created_at BETWEEN $1 AND $2
-          AND event_category = 'security'
-          AND status IN ('failure', 'warning')
-        ORDER BY created_at DESC
-        LIMIT 100
-      `;
+    // Test 3: Check table columns
+    const columnsQuery = await pool.query(`
+      SELECT column_name, data_type 
+      FROM information_schema.columns 
+      WHERE table_name = 'admin_audit_logs'
+      ORDER BY ordinal_position
+    `);
 
-      const resourcesQuery = `
-        SELECT 
-          entity_type as resource_type,
-          resource_name,
-          COUNT(*) as access_count,
-          COUNT(DISTINCT user_email) as unique_users
-        FROM audit_logs
-        WHERE created_at BETWEEN $1 AND $2
-          AND entity_type IS NOT NULL
-          AND event_category IN ('access', 'modification')
-        GROUP BY entity_type, resource_name
-        ORDER BY access_count DESC
-        LIMIT 20
-      `;
+    // Test 4: Use getAdminLogs method
+    const auditLoggerResult = await AuditLogger.getAdminLogs({}, 1, 5);
 
-      const [summaryResult, userActivityResult, securityResult, resourcesResult] = await Promise.all([
-        pool.query(summaryQuery, [startDate, endDate]),
-        pool.query(userActivityQuery, [startDate, endDate]),
-        pool.query(securityQuery, [startDate, endDate]),
-        pool.query(resourcesQuery, [startDate, endDate])
-      ]);
+    res.json({
+      success: true,
+      tableStructure: columnsQuery.rows,
+      sampleData: sampleQuery.rows,
+      totalLogs: countQuery.rows[0].total,
+      getAdminLogsResult: {
+        logsCount: auditLoggerResult.logs.length,
+        totalItems: auditLoggerResult.pagination.totalItems,
+        firstLog: auditLoggerResult.logs[0] || null
+      },
+      note: 'Admin Actions tab should show data if getAdminLogsResult.logsCount > 0'
+    });
 
-      const totalEvents = summaryResult.rows.reduce((sum, row) => sum + parseInt(row.count), 0);
-      const failedEvents = summaryResult.rows
-      .filter(row => row.status === 'failure')
-      .reduce((sum, row) => sum + parseInt(row.count), 0);
-
-      return {
-        report: {
-          period: {
-            startDate,
-            endDate,
-            durationDays: Math.ceil((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24))
-          },
-          generatedAt: new Date().toISOString(),
-          summary: {
-            byCategory: summaryResult.rows.reduce((acc, row) => {
-              const category = row.event_category;
-              const status = row.status;
-              const count = parseInt(row.count);
-
-              if (!acc[category]) {
-                acc[category] = { total: 0, success: 0, failure: 0, warning: 0, unknown: 0 };
-              }
-              acc[category][status] = count;
-              acc[category].total += count;
-              return acc;
-            }, {}),
-            totals: {
-              totalEvents,
-              failedEvents,
-              successRate: totalEvents > 0 ? ((totalEvents - failedEvents) / totalEvents * 100).toFixed(2) : 0
-            }
-          },
-          userActivity: userActivityResult.rows,
-          securityIncidents: securityResult.rows,
-          topResources: resourcesResult.rows,
-          compliance: {
-            totalEvents,
-            hasAuthenticationLogs: summaryResult.rows.some(row => row.event_category === 'authentication'),
-            hasAccessLogs: summaryResult.rows.some(row => row.event_category === 'access'),
-            hasModificationLogs: summaryResult.rows.some(row => row.event_category === 'modification'),
-            securityIncidentsCount: securityResult.rows.length,
-            uniqueUsers: userActivityResult.rows.length,
-            meetsHIPAARequirements: summaryResult.rows.some(row =>
-                ['authentication', 'access', 'modification', 'security'].includes(row.event_category)
-            )
-          }
-        }
-      };
-
-    } catch (error) {
-      throw new Error(`Failed to generate compliance report: ${error.message}`);
-    }
+  } catch (error) {
+    console.error('❌ Test admin logs error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
+});
+/**
+ * GET /api/audit/admin-logs - Get admin audit logs (from admin_audit_logs table)
+ */
+router.get('/admin-logs', checkJwt, attachAdminUser, requireAdmin, async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      eventCategory = '',
+      status = '',
+      startDate = '',
+      endDate = '',
+      search = ''
+    } = req.query;
 
-  static async cleanupExpiredLogs() {
-    try {
-      const query = `
-        DELETE FROM audit_logs 
-        WHERE expires_at < NOW()
-        RETURNING COUNT(*) as deleted_count
-      `;
+    console.log('🔍 [API /admin-logs] Query params:', req.query);
 
-      const result = await pool.query(query);
-      const deletedCount = parseInt(result.rows[0].deleted_count);
+    // Map frontend filters to admin log filters
+    const filters = {
+      actionType: search || '',
+      startDate,
+      endDate,
+      search
+    };
 
-      if (deletedCount > 0) {
-        await AuditLogger.logSystemEvent('CLEANUP', `Cleaned up ${deletedCount} expired audit logs`);
+    const result = await AuditLogger.getAdminLogs(filters, parseInt(page), parseInt(limit));
+
+    console.log(`✅ [API /admin-logs] Returning ${result.logs.length} admin logs, total: ${result.pagination.totalItems}`);
+
+    // Format response for frontend
+    const formattedLogs = result.logs.map(log => ({
+      id: log.id,
+      timestamp: log.created_at,
+      user: log.user,
+      action: log.action,
+      target: log.target,
+      resource: log.resource,
+      ipAddress: log.ipAddress,
+      userAgent: log.user_agent,
+      details: log.details,
+      // Additional info for details modal if needed
+      _raw: {
+        adminEmail: log.admin_email,
+        adminName: log.admin_name,
+        targetEmail: log.target_email,
+        targetName: log.target_name,
+        resourceType: log.resource_type,
+        resourceName: log.resource_name,
+        actionType: log.action_type
       }
+    }));
 
-      return { deletedCount };
+    res.json({
+      success: true,
+      logs: formattedLogs,
+      pagination: {
+        total: result.pagination.totalItems,
+        page: result.pagination.currentPage,
+        totalPages: result.pagination.totalPages,
+        limit: parseInt(limit)
+      }
+    });
 
-    } catch (error) {
-      throw new Error(`Failed to cleanup expired logs: ${error.message}`);
-    }
+  } catch (error) {
+    console.error('❌ [API /admin-logs] Error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
+});
+router.get('/admin-logs-debug', checkJwt, attachAdminUser, requireAdmin, async (req, res) => {
+  try {
+    const { pool } = require('../db');
+    const { limit = 10 } = req.query;
 
-  static async exportLogsToCSV(filters = {}) {
-    try {
-      const { logs } = await AuditLogger.getLogs(filters, 1, 1000000);
-
-      if (logs.length === 0) {
-        return '';
-      }
-
-      const headers = [
-        'ID', 'Timestamp', 'User Email', 'User Role', 'Event Type',
-        'Event Category', 'Resource Type', 'Resource ID', 'Resource Name',
-        'IP Address', 'Status', 'Error Message'
-      ];
-
-      const rows = logs.map(log => [
-        log.id,
-        new Date(log.created_at).toISOString(),
-        log.user_email || '',
-        log.user_role || '',
-        log.event_type,
-        log.event_category || '',
-        log.resource_type || '',
-        log.resource_id || '',
-        log.resource_name || '',
-        log.ip_address || '',
-        log.status,
-        log.error_message ? `"${log.error_message.replace(/"/g, '""')}"` : ''
-      ]);
-
-      const csvContent = [
-        headers.join(','),
-        ...rows.map(row => row.join(','))
-      ].join('\n');
-
-      return csvContent;
-
-    } catch (error) {
-      throw new Error(`Failed to export logs: ${error.message}`);
-    }
-  }
-
-  static async getAdminLogs(filters = {}, page = 1, limit = 50) {
-    try {
-      const offset = (page - 1) * limit;
-
-      const whereConditions = [];
-      const params = [];
-      let paramCount = 1;
-
-      if (filters.actionType) {
-        whereConditions.push(`action_type ILIKE $${paramCount}`);
-        params.push(`%${filters.actionType}%`);
-        paramCount++;
-      }
-
-      if (filters.startDate) {
-        whereConditions.push(`DATE(created_at) >= $${paramCount}`);
-        params.push(filters.startDate);
-        paramCount++;
-      }
-
-      if (filters.endDate) {
-        whereConditions.push(`DATE(created_at) <= $${paramCount}`);
-        params.push(filters.endDate);
-        paramCount++;
-      }
-
-      if (filters.search) {
-        whereConditions.push(`(
-        action_type ILIKE $${paramCount}
-      )`);
-        params.push(`%${filters.search}%`);
-        paramCount++;
-      }
-
-      const whereClause = whereConditions.length > 0
-          ? `WHERE ${whereConditions.join(' AND ')}`
-          : '';
-
-      const countQuery = `SELECT COUNT(*) as total FROM admin_audit_logs ${whereClause}`;
-      const countResult = await pool.query(countQuery, params);
-      const totalItems = parseInt(countResult.rows[0].total);
-
-      const paginationParams = [...params, limit, offset];
-
-      const query = `
+    // Get admin logs with their action types
+    const result = await pool.query(`
       SELECT 
         id,
-        admin_user_id,
         action_type,
+        admin_user_id,
         target_user_id,
         details,
-        ip_address,
-        user_agent,
-        created_at
+        created_at,
+        pg_typeof(details) as details_type,
+        CASE 
+          WHEN details IS NULL OR details = 'null'::jsonb THEN 'null'
+          WHEN jsonb_typeof(details) = 'object' AND jsonb_object_length(details) = 0 THEN 'empty_object'
+          WHEN jsonb_typeof(details) = 'object' THEN 'has_data'
+          ELSE 'unknown'
+        END as details_status
       FROM admin_audit_logs 
-      ${whereClause}
+      WHERE action_type ILIKE '%USER%'
       ORDER BY created_at DESC 
-      LIMIT $${paramCount} OFFSET $${paramCount + 1}
+      LIMIT $1
+    `, [parseInt(limit)]);
+
+    // Also get a sample of all action types
+    const actionTypes = await pool.query(`
+      SELECT 
+        action_type,
+        COUNT(*) as count
+      FROM admin_audit_logs 
+      GROUP BY action_type
+      ORDER BY count DESC
+      LIMIT 20
+    `);
+
+    res.json({
+      success: true,
+      user_related_logs: result.rows.map(log => ({
+        id: log.id,
+        action_type: log.action_type,
+        admin_user_id: log.admin_user_id,
+        target_user_id: log.target_user_id,
+        details: log.details,
+        details_type: log.details_type,
+        details_status: log.details_status,
+        created_at: log.created_at
+      })),
+      action_types_summary: actionTypes.rows,
+      recommendation: 'We need to log more details when admin performs actions'
+    });
+
+  } catch (error) {
+    console.error('Admin logs debug error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/audit/report - Generate compliance report (Admin only)
+ * Now uses enhanced audit_logs table
+ */
+router.get('/report', checkJwt, attachAdminUser, requireAdmin, async (req, res) => {
+  try {
+    let { startDate, endDate = new Date().toISOString() } = req.query;
+
+    // Validate startDate
+    if (!startDate) {
+      return res.status(400).json({
+        success: false,
+        error: 'startDate parameter is required'
+      });
+    }
+
+    // Validate date format
+    const startDateObj = new Date(startDate);
+    const endDateObj = new Date(endDate);
+
+    if (isNaN(startDateObj.getTime())) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid startDate format. Use ISO format (YYYY-MM-DD)'
+      });
+    }
+
+    if (isNaN(endDateObj.getTime())) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid endDate format. Use ISO format (YYYY-MM-DD)'
+      });
+    }
+
+    // Ensure startDate is before endDate
+    if (startDateObj > endDateObj) {
+      return res.status(400).json({
+        success: false,
+        error: 'startDate must be before endDate'
+      });
+    }
+
+    // Limit report to max 365 days
+    const maxDays = 365;
+    const daysDiff = Math.ceil((endDateObj - startDateObj) / (1000 * 60 * 60 * 24));
+
+    if (daysDiff > maxDays) {
+      return res.status(400).json({
+        success: false,
+        error: `Report period cannot exceed ${maxDays} days`
+      });
+    }
+
+    const report = await AuditLogger.generateComplianceReport(startDate, endDate);
+
+    // Log report generation
+    try {
+      await AuditLogger.logAccess(
+          req.adminUser,
+          'audit_report',
+          null,
+          'Compliance Report',
+          'generate',
+          req.ip,
+          req.headers['user-agent']
+      );
+    } catch (logError) {
+      console.warn('Failed to log access:', logError.message);
+    }
+
+    res.json({
+      success: true,
+      ...report,
+      message: `Compliance report generated for ${daysDiff} day(s)`
+    });
+
+  } catch (error) {
+    console.error('Generate report error:', error);
+
+    try {
+      await AuditLogger.logSecurityEvent(
+          req.adminUser,
+          'REPORT_GENERATION_ERROR',
+          `Failed to generate compliance report: ${error.message}`,
+          'medium',
+          req.ip,
+          req.headers['user-agent']
+      );
+    } catch (logError) {
+      console.error('Failed to log security event:', logError);
+    }
+
+    res.status(500).json({
+      success: false,
+      error: 'Failed to generate compliance report',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * GET /api/audit/export - Export logs to CSV (Admin only)
+ * Now uses enhanced audit_logs table
+ */
+router.get('/export', checkJwt, attachAdminUser, requireAdmin, async (req, res) => {
+  try {
+    const {
+      startDate,
+      endDate = new Date().toISOString(),
+      eventCategory,
+      status
+    } = req.query;
+
+    // Validate dates if provided
+    if (startDate && isNaN(new Date(startDate).getTime())) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid startDate format'
+      });
+    }
+
+    if (endDate && isNaN(new Date(endDate).getTime())) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid endDate format'
+      });
+    }
+
+    const filters = {};
+    if (startDate) filters.startDate = startDate;
+    if (endDate) filters.endDate = endDate;
+    if (eventCategory) filters.eventCategory = eventCategory;
+    if (status) filters.status = status;
+
+    const csvContent = await AuditLogger.exportLogsToCSV(filters);
+
+    if (!csvContent) {
+      return res.status(404).json({
+        success: false,
+        error: 'No logs found to export'
+      });
+    }
+
+    // Log export
+    try {
+      await AuditLogger.logAccess(
+          req.adminUser,
+          'audit_log',
+          null,
+          'Audit Logs',
+          'export',
+          req.ip,
+          req.headers['user-agent']
+      );
+    } catch (logError) {
+      console.warn('Failed to log access:', logError.message);
+    }
+
+    // Set headers for CSV download
+    const filename = `audit-logs-${new Date().toISOString().split('T')[0]}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csvContent);
+
+  } catch (error) {
+    console.error('Export logs error:', error);
+
+    try {
+      await AuditLogger.logSecurityEvent(
+          req.adminUser,
+          'EXPORT_ERROR',
+          `Failed to export audit logs: ${error.message}`,
+          'medium',
+          req.ip,
+          req.headers['user-agent']
+      );
+    } catch (logError) {
+      console.error('Failed to log security event:', logError);
+    }
+
+    res.status(500).json({
+      success: false,
+      error: 'Failed to export audit logs',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * POST /api/audit/log - Manually log an audit event (Admin only)
+ * Now uses enhanced audit_logs table
+ */
+router.post('/log', checkJwt, attachAdminUser, requireAdmin, async (req, res) => {
+  try {
+    const event = req.body;
+
+    // Validate required fields
+    if (!event.eventType || !event.eventCategory || !event.eventDescription) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: eventType, eventCategory, eventDescription'
+      });
+    }
+
+    // Add user info from authenticated request
+    const enhancedEvent = {
+      ...event,
+      userId: event.userId || req.adminUser.id,
+      userEmail: event.userEmail || req.adminUser.email,
+      userRole: event.userRole || req.adminUser.role,
+      auth0UserId: event.auth0UserId || req.adminUser.auth0_id
+    };
+
+    const auditLogger = new AuditLogger();
+    const result = await auditLogger.log(enhancedEvent);
+
+    // Log this manual logging event
+    try {
+      await AuditLogger.logAccess(
+          req.adminUser,
+          'audit_log',
+          result?.id || 'manual',
+          'Manual Audit Log',
+          'create',
+          req.ip,
+          req.headers['user-agent']
+      );
+    } catch (logError) {
+      console.warn('Failed to log access:', logError.message);
+    }
+
+    res.json({
+      success: true,
+      logId: result?.id,
+      message: 'Audit event logged successfully'
+    });
+
+  } catch (error) {
+    console.error('Manual log error:', error);
+
+    try {
+      await AuditLogger.logSecurityEvent(
+          req.adminUser,
+          'MANUAL_LOG_ERROR',
+          `Failed to manually log audit event: ${error.message}`,
+          'medium',
+          req.ip,
+          req.headers['user-agent']
+      );
+    } catch (logError) {
+      console.error('Failed to log security event:', logError);
+    }
+
+    res.status(500).json({
+      success: false,
+      error: 'Failed to log audit event',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * DELETE /api/audit/cleanup - Clean up expired logs (Admin only)
+ */
+router.delete('/cleanup', checkJwt, attachAdminUser, requireAdmin, async (req, res) => {
+  try {
+    const result = await AuditLogger.cleanupExpiredLogs();
+
+    // Log cleanup
+    try {
+      await AuditLogger.logSystemEvent(
+          'MANUAL_CLEANUP',
+          `Manual cleanup performed by ${req.adminUser.email}`
+      );
+    } catch (logError) {
+      console.warn('Failed to log system event:', logError.message);
+    }
+
+    res.json({
+      success: true,
+      ...result,
+      message: `Cleaned up ${result.deletedCount} expired audit logs`
+    });
+
+  } catch (error) {
+    console.error('Cleanup error:', error);
+
+    try {
+      await AuditLogger.logSecurityEvent(
+          req.adminUser,
+          'CLEANUP_ERROR',
+          `Failed to cleanup expired logs: ${error.message}`,
+          'medium',
+          req.ip,
+          req.headers['user-agent']
+      );
+    } catch (logError) {
+      console.error('Failed to log security event:', logError);
+    }
+
+    res.status(500).json({
+      success: false,
+      error: 'Failed to cleanup expired logs',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * GET /api/audit/stats - Get audit log statistics (Admin only)
+ * Now uses enhanced audit_logs table
+ */
+router.get('/stats', checkJwt, attachAdminUser, requireAdmin, async (req, res) => {
+  try {
+    const { period = '30days' } = req.query;
+
+    let startDate = new Date();
+    switch (period) {
+      case '7days':
+        startDate.setDate(startDate.getDate() - 7);
+        break;
+      case '30days':
+        startDate.setDate(startDate.getDate() - 30);
+        break;
+      case '90days':
+        startDate.setDate(startDate.getDate() - 90);
+        break;
+      case '365days':
+        startDate.setDate(startDate.getDate() - 365);
+        break;
+      default:
+        startDate.setDate(startDate.getDate() - 30);
+    }
+
+    const startDateISO = startDate.toISOString();
+    const endDateISO = new Date().toISOString();
+
+    const report = await AuditLogger.generateComplianceReport(startDateISO, endDateISO);
+
+    // Get recent activity
+    const recentQuery = `
+      SELECT 
+        action as event_type,
+        user_email,
+        resource_name,
+        created_at
+      FROM audit_logs
+      ORDER BY created_at DESC
+      LIMIT 10
     `;
 
-      const result = await pool.query(query, paginationParams);
+    const { pool } = require('../db');
+    const recentResult = await pool.query(recentQuery);
 
-      const userCache = new Map();
+    res.json({
+      success: true,
+      period: {
+        start: startDateISO,
+        end: endDateISO,
+        days: Math.ceil((new Date(endDateISO) - new Date(startDateISO)) / (1000 * 60 * 60 * 24))
+      },
+      summary: report.report.summary,
+      recentActivity: recentResult.rows,
+      message: 'Audit statistics retrieved successfully'
+    });
 
-      const getUserInfo = async (userId) => {
-        if (!userId) return null;
+  } catch (error) {
+    console.error('Get stats error:', error);
 
-        if (userCache.has(userId)) {
-          return userCache.get(userId);
-        }
+    try {
+      await AuditLogger.logSecurityEvent(
+          req.adminUser,
+          'STATS_ERROR',
+          `Failed to get audit statistics: ${error.message}`,
+          'medium',
+          req.ip,
+          req.headers['user-agent']
+      );
+    } catch (logError) {
+      console.error('Failed to log security event:', logError);
+    }
 
-        try {
-          const userResult = await pool.query(
-              'SELECT id, email, first_name, last_name FROM users WHERE id = $1',
-              [userId]
-          );
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get audit statistics',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 
-          const userInfo = userResult.rows.length > 0 ? userResult.rows[0] : null;
-          userCache.set(userId, userInfo);
-          return userInfo;
-        } catch (error) {
-          return null;
-        }
-      };
+// routes/auditLogs.js - DEBUGGING ENDPOINT
 
-      const logs = [];
+router.get('/debug-audit', checkJwt, attachAdminUser, requireAdmin, async (req, res) => {
+  try {
+    const { pool } = require('../db');
 
-      for (const log of result.rows) {
-        try {
-          const adminInfo = await getUserInfo(log.admin_user_id);
-          const admin_email = adminInfo?.email || 'unknown@empowermed.com';
-          const admin_name = adminInfo ? `${adminInfo.first_name || ''} ${adminInfo.last_name || ''}`.trim() : '';
+    console.log('🔍 [DEBUG AUDIT] Testing audit_logs query...');
+    console.log('🔍 [DEBUG AUDIT] Request query params:', req.query);
 
-          let target_email = '';
-          let target_name = '';
-          let targetInfo = null;
+    // Test 1: Direct simple query
+    const simpleQuery = `
+      SELECT 
+        id,
+        user_email,
+        action,
+        event_category,
+        created_at
+      FROM audit_logs 
+      ORDER BY created_at DESC 
+      LIMIT 5
+    `;
 
-          if (log.target_user_id) {
-            targetInfo = await getUserInfo(log.target_user_id);
-            target_email = targetInfo?.email || '';
-            target_name = targetInfo ? `${targetInfo.first_name || ''} ${targetInfo.last_name || ''}`.trim() : '';
-          }
+    const simpleResult = await pool.query(simpleQuery);
+    console.log('✅ [DEBUG AUDIT] Simple query result count:', simpleResult.rows.length);
+    console.log('📊 [DEBUG AUDIT] Sample rows:', simpleResult.rows);
 
-          let details = {};
-          if (log.details && typeof log.details === 'object' && Object.keys(log.details).length > 0) {
-            details = log.details;
-          } else if (log.details && typeof log.details === 'string' && log.details.trim()) {
-            try {
-              details = JSON.parse(log.details);
-            } catch (parseError) {
-            }
-          }
+    // Test 2: Test with getLogs method using current filters
+    console.log('🔍 [DEBUG AUDIT] Testing AuditLogger.getLogs() with filters...');
+    const logsResult = await AuditLogger.getLogs({
+      startDate: req.query.startDate,
+      endDate: req.query.endDate,
+      eventCategory: req.query.eventCategory,
+      status: req.query.status,
+      search: req.query.search
+    }, 1, 20);
 
-          const action_type = log.action_type || '';
-          let inferred_target = 'N/A';
-          let inferred_resource = 'System';
-          let inferred_resource_type = '';
+    console.log('✅ [DEBUG AUDIT] getLogs() result count:', logsResult.logs.length);
+    console.log('📊 [DEBUG AUDIT] getLogs() pagination:', logsResult.pagination);
 
-          if (action_type.includes('USER_')) {
-            inferred_resource_type = 'user';
-            if (action_type.includes('CREATE') || action_type.includes('ADD')) {
-              inferred_resource = 'User Account';
-              inferred_target = target_email || 'New User';
-            } else if (action_type.includes('UPDATE') || action_type.includes('EDIT')) {
-              inferred_resource = 'User Account';
-              inferred_target = target_email || 'User';
-            } else if (action_type.includes('DELETE') || action_type.includes('REMOVE')) {
-              inferred_resource = 'User Account';
-              inferred_target = target_email || 'User';
-            } else if (action_type.includes('VIEW') || action_type.includes('GET')) {
-              inferred_resource = 'User Profile';
-              inferred_target = target_email || 'User';
-            }
-          } else if (action_type.includes('PATIENT_')) {
-            inferred_resource_type = 'patient';
-            inferred_resource = 'Patient Record';
-            inferred_target = target_email || 'Patient';
-          } else if (action_type.includes('APPOINTMENT_')) {
-            inferred_resource_type = 'appointment';
-            inferred_resource = 'Appointment';
-            inferred_target = 'Appointment';
-          } else if (action_type.includes('DOCUMENT_') || action_type.includes('FILE_')) {
-            inferred_resource_type = 'document';
-            inferred_resource = 'Document/File';
-            inferred_target = 'Document';
-          } else if (action_type.includes('SETTING_') || action_type.includes('CONFIG_')) {
-            inferred_resource_type = 'settings';
-            inferred_resource = 'System Settings';
-            inferred_target = 'Configuration';
-          } else if (action_type.includes('DASHBOARD')) {
-            inferred_resource_type = 'dashboard';
-            inferred_resource = 'Dashboard';
-            inferred_target = 'Statistics/Reports';
-          } else if (action_type.includes('LOG_') || action_type.includes('AUDIT_')) {
-            inferred_resource_type = 'audit';
-            inferred_resource = 'Audit Logs';
-            inferred_target = 'Log Records';
-          } else if (action_type.includes('EMAIL_') || action_type.includes('NOTIFICATION_')) {
-            inferred_resource_type = 'communication';
-            inferred_resource = 'Email/Notification';
-            inferred_target = target_email || 'Recipient';
-          } else if (action_type.includes('LOGIN') || action_type.includes('AUTH')) {
-            inferred_resource_type = 'authentication';
-            inferred_resource = 'Authentication';
-            inferred_target = 'System Access';
-          }
+    if (logsResult.logs.length > 0) {
+      console.log('📊 [DEBUG AUDIT] First log from getLogs():', {
+        id: logsResult.logs[0].id,
+        user_email: logsResult.logs[0].user_email,
+        event_type: logsResult.logs[0].event_type,
+        event_category: logsResult.logs[0].event_category,
+        created_at: logsResult.logs[0].created_at
+      });
+    }
 
-          const final_target = target_email || target_name || inferred_target;
-          const final_resource = details.resource_name || details.resourceName || inferred_resource;
-          const final_resource_type = details.resource_type || details.resourceType || inferred_resource_type;
+    // Test 3: Check exact column names
+    const columnCheck = await pool.query(`
+      SELECT column_name, data_type
+      FROM information_schema.columns 
+      WHERE table_name = 'audit_logs'
+      ORDER BY ordinal_position;
+    `);
 
-          const formattedLog = {
-            id: log.id,
-            admin_user_id: log.admin_user_id,
-            admin_email: admin_email,
-            admin_name: admin_name,
-            action_type: action_type,
-            target_user_id: log.target_user_id,
-            target_email: target_email,
-            target_name: target_name,
-            resource_type: final_resource_type,
-            resource_name: final_resource,
-            details: details,
-            ip_address: log.ip_address,
-            user_agent: log.user_agent,
-            created_at: log.created_at,
-            user: admin_email,
-            action: this.formatActionForDisplay(action_type),
-            target: final_target,
-            resource: final_resource,
-            ipAddress: log.ip_address
-          };
+    console.log('📊 [DEBUG AUDIT] Table columns:', columnCheck.rows.map(c => c.column_name));
 
-          logs.push(formattedLog);
-
-        } catch (error) {
-          logs.push({
-            id: log.id,
-            user: 'Error',
-            action: log.action_type || 'Unknown',
-            target: 'Error',
-            resource: 'Error',
-            created_at: log.created_at,
-            details: { error: 'Failed to process log' }
-          });
+    res.json({
+      success: true,
+      directQuery: {
+        count: simpleResult.rows.length,
+        sample: simpleResult.rows
+      },
+      getLogs: {
+        count: logsResult.logs.length,
+        pagination: logsResult.pagination,
+        sample: logsResult.logs.length > 0 ? logsResult.logs[0] : null
+      },
+      tableColumns: columnCheck.rows.map(c => c.column_name),
+      debugInfo: {
+        filtersUsed: {
+          startDate: req.query.startDate,
+          endDate: req.query.endDate,
+          eventCategory: req.query.eventCategory,
+          status: req.query.status,
+          search: req.query.search
         }
       }
+    });
 
-      return {
-        logs,
-        pagination: {
-          currentPage: page,
-          totalPages: Math.ceil(totalItems / limit),
-          totalItems,
-          itemsPerPage: limit
-        }
-      };
-
-    } catch (error) {
-      return {
-        logs: [],
-        pagination: {
-          currentPage: page,
-          totalPages: 1,
-          totalItems: 0,
-          itemsPerPage: limit
-        }
-      };
-    }
+  } catch (error) {
+    console.error('❌ [DEBUG AUDIT] Error:', error);
+    console.error('❌ [DEBUG AUDIT] Error stack:', error.stack);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: error.stack
+    });
   }
-
-  static formatActionForDisplay(actionType) {
-    if (!actionType) return 'Unknown Action';
-
-    let formatted = actionType.replace(/_/g, ' ');
-
-    formatted = formatted.toLowerCase()
-    .split(' ')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-
-    return formatted;
-  }
-}
-
-module.exports = AuditLogger;
+});
+module.exports = router;
