@@ -20,10 +20,8 @@ async function attachUser(req, res, next) {
 
     const user = rows[0];
 
-    // ✅ Attach canonical user
     req.user = user;
 
-    // ✅ BRIDGE: make requireAdmin happy
     if (user.is_admin === true || user.role === "Administrator") {
       req.adminUser = user;
     }

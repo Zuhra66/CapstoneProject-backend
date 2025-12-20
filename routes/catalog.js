@@ -2,7 +2,6 @@ const express = require('express');
 const router = express.Router();
 const { pool } = require('../db');
 
-// GET /api/categories
 router.get('/categories', async (_req, res) => {
   try {
     const { rows } = await pool.query(`
@@ -15,13 +14,10 @@ router.get('/categories', async (_req, res) => {
     `);
     res.json(rows ?? []);
   } catch (e) {
-    console.error('Categories route error:', e);
     res.status(500).json({ error: 'Failed to fetch categories' });
   }
 });
 
-/* ---------------------- PRODUCTS --------------------- */
-// GET /api/products?q=&category=&limit=&offset=
 router.get('/products', async (req, res) => {
   try {
     const qRaw = (req.query.q || '').toString().trim();
@@ -69,7 +65,6 @@ router.get('/products', async (req, res) => {
     const { rows } = await pool.query(sql, params);
     res.json(rows ?? []);
   } catch (e) {
-    console.error('Products route error:', e);
     res.status(500).json({ error: 'Failed to fetch products' });
   }
 });

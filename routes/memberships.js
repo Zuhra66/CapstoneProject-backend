@@ -42,7 +42,7 @@ async function activateMembership(userId, planId, provider, paypalSubId = null) 
   const isPaypal = provider === "paypal";
 
   await pool.query(
-    `
+      `
     INSERT INTO user_memberships (
       user_id,
       plan_id,
@@ -71,39 +71,39 @@ async function activateMembership(userId, planId, provider, paypalSubId = null) 
       end_at = ${isPaypal ? "NULL" : "NOW() + INTERVAL '1 month'"},
       updated_at = NOW();
     `,
-    [userId, planId, provider, paypalSubId]
+      [userId, planId, provider, paypalSubId]
   );
 
   await pool.query(
-    `UPDATE users SET role = 'Member', updated_at = NOW() WHERE id = $1`,
-    [userId]
+      `UPDATE users SET role = 'Member', updated_at = NOW() WHERE id = $1`,
+      [userId]
   );
 }
 
 async function markMembershipPastDue(userId) {
   await pool.query(
-    `UPDATE user_memberships SET status = 'past_due', updated_at = NOW()
+      `UPDATE user_memberships SET status = 'past_due', updated_at = NOW()
      WHERE user_id = $1`,
-    [userId]
+      [userId]
   );
 }
 
 async function markMembershipFailed(userId) {
   await pool.query(
-    `
+      `
     UPDATE user_memberships
     SET status = 'past_due',
         updated_at = NOW()
     WHERE user_id = $1
     `,
-    [userId]
+      [userId]
   );
 }
 
 async function cancelMembership(userId) {
   // Cancel membership only if not already cancelled
   const result = await pool.query(
-    `
+      `
     UPDATE user_memberships
     SET
       status = 'cancelled',
@@ -112,36 +112,32 @@ async function cancelMembership(userId) {
     WHERE user_id = $1
       AND status != 'cancelled'
     `,
-    [userId]
+      [userId]
   );
-
-  console.log("🧾 Membership cancel rows affected:", result.rowCount);
 
   // Downgrade role only if needed
   await pool.query(
-    `
+      `
     UPDATE users
     SET role = 'User',
         updated_at = NOW()
     WHERE id = $1
       AND role != 'User'
     `,
-    [userId]
+      [userId]
   );
 }
 
-
-// routes/memberships.js
 async function getInternalPlanIdFromPaypalPlan(paypalPlanId) {
   const { rows } = await pool.query(
-    `
+      `
     SELECT id
     FROM membership_plans
     WHERE paypal_plan_id = $1
       AND is_active = TRUE
     LIMIT 1
     `,
-    [paypalPlanId]
+      [paypalPlanId]
   );
 
   if (!rows.length) {
@@ -159,7 +155,7 @@ async function getInternalPlanIdFromPaypalPlan(paypalPlanId) {
 router.get("/plans", async (req, res) => {
   try {
     const result = await pool.query(
-      "SELECT * FROM membership_plans WHERE is_active = TRUE ORDER BY price_cents ASC;"
+        "SELECT * FROM membership_plans WHERE is_active = TRUE ORDER BY price_cents ASC;"
     );
     res.json({ plans: result.rows });
   } catch (err) {
@@ -187,7 +183,6 @@ router.get("/me", checkJwt, async (req, res) => {
   }
 });
 
-
 // =============================
 // CANCEL MEMBERSHIP (USER)
 // =============================
@@ -196,8 +191,8 @@ router.post("/cancel", checkJwt, async (req, res) => {
     const auth0Id = req.auth.sub;
 
     const userRes = await pool.query(
-      "SELECT id FROM users WHERE auth0_id = $1",
-      [auth0Id]
+        "SELECT id FROM users WHERE auth0_id = $1",
+        [auth0Id]
     );
 
     if (!userRes.rows.length) {
@@ -213,8 +208,8 @@ router.post("/cancel", checkJwt, async (req, res) => {
 
     // Cancel PayPal if applicable
     if (
-      membership.provider === "paypal" &&
-      membership.paypal_subscription_id
+        membership.provider === "paypal" &&
+        membership.paypal_subscription_id
     ) {
       await cancelPaypalSubscription(membership.paypal_subscription_id);
     }
@@ -230,7 +225,7 @@ router.post("/cancel", checkJwt, async (req, res) => {
 });
 
 // =============================
-// ADMIN: ASSIGN MEMBERSHIP 
+// ADMIN: ASSIGN MEMBERSHIP
 // =============================
 router.post("/admin/assign", checkJwt, async (req, res) => {
   const { userId, membershipType } = req.body;
@@ -242,13 +237,10 @@ router.post("/admin/assign", checkJwt, async (req, res) => {
   try {
     await pool.query("BEGIN");
 
-    
-    // -------------------------
     // ASSIGN STUDENT / GENERAL
-    // -------------------------
     const planRes = await pool.query(
-      `SELECT id FROM membership_plans WHERE slug = $1 AND is_active = TRUE LIMIT 1`,
-      [membershipType]
+        `SELECT id FROM membership_plans WHERE slug = $1 AND is_active = TRUE LIMIT 1`,
+        [membershipType]
     );
 
     if (!planRes.rows.length) {
@@ -258,7 +250,7 @@ router.post("/admin/assign", checkJwt, async (req, res) => {
     const planId = planRes.rows[0].id;
 
     await pool.query(
-      `
+        `
       INSERT INTO user_memberships (
         user_id,
         plan_id,
@@ -279,12 +271,12 @@ router.post("/admin/assign", checkJwt, async (req, res) => {
         end_at = NOW() + INTERVAL '1 month',
         updated_at = NOW()
       `,
-      [userId, planId]
+        [userId, planId]
     );
 
     await pool.query(
-      `UPDATE users SET role = 'Member', updated_at = NOW() WHERE id = $1`,
-      [userId]
+        `UPDATE users SET role = 'Member', updated_at = NOW() WHERE id = $1`,
+        [userId]
     );
 
     await pool.query("COMMIT");
@@ -292,7 +284,7 @@ router.post("/admin/assign", checkJwt, async (req, res) => {
 
   } catch (err) {
     await pool.query("ROLLBACK");
-    console.error("🔥 Admin assign membership error:", err);
+    console.error("Admin assign membership error:", err);
     res.status(500).json({ error: "Failed to assign membership" });
   }
 });
@@ -315,10 +307,10 @@ router.post("/admin/cancel", checkJwt, async (req, res) => {
       return res.json({ success: true, message: "No active membership" });
     }
 
-    // 🔔 Cancel PayPal subscription if applicable
+    // Cancel PayPal subscription if applicable
     if (
-      membership.provider === "paypal" &&
-      membership.paypal_subscription_id
+        membership.provider === "paypal" &&
+        membership.paypal_subscription_id
     ) {
       await cancelPaypalSubscription(membership.paypal_subscription_id);
     }
@@ -329,43 +321,38 @@ router.post("/admin/cancel", checkJwt, async (req, res) => {
     res.json({ success: true, message: "Membership cancelled by admin" });
 
   } catch (err) {
-    console.error("🔥 Admin cancel membership error:", err);
+    console.error("Admin cancel membership error:", err);
     res.status(500).json({ error: "Failed to cancel membership" });
   }
 });
 
-
 router.post("/paypal", async (req, res) => {
-  console.log("🚨 WEBHOOK HIT:", new Date().toISOString());
   try {
-    // 🔕 Verification temporarily disabled (OK for testing)
+    // Verification temporarily disabled (OK for testing)
     // const isValid = await verifyPaypalWebhook(req);
     // if (!isValid) {
-    //   console.warn("⚠️ Invalid PayPal webhook signature");
     //   return res.sendStatus(400);
     // }
 
     const event = req.body;
-    console.log("PayPal Webhook:", event.event_type);
 
     const subscriptionId = event.resource?.id;
     const userId = event.resource?.custom_id;
     const planId = event.resource?.plan_id;
 
     if (!subscriptionId || !userId) {
-      console.warn("⚠️ Missing subscriptionId or userId");
       return res.sendStatus(200);
     }
 
     switch (event.event_type) {
       case "BILLING.SUBSCRIPTION.ACTIVATED": {
         const internalPlanId =
-          await getInternalPlanIdFromPaypalPlan(planId);
+            await getInternalPlanIdFromPaypalPlan(planId);
         await activateMembership(
-          userId,
-          internalPlanId,
-          "paypal",
-          subscriptionId
+            userId,
+            internalPlanId,
+            "paypal",
+            subscriptionId
         );
         break;
       }
@@ -384,12 +371,12 @@ router.post("/paypal", async (req, res) => {
 
       case "BILLING.SUBSCRIPTION.RE-ACTIVATED": {
         const internalPlanId =
-          await getInternalPlanIdFromPaypalPlan(planId);
+            await getInternalPlanIdFromPaypalPlan(planId);
         await activateMembership(
-          userId,
-          internalPlanId,
-          "paypal",
-          subscriptionId
+            userId,
+            internalPlanId,
+            "paypal",
+            subscriptionId
         );
         break;
       }
@@ -402,8 +389,6 @@ router.post("/paypal", async (req, res) => {
   }
 });
 
-
-
 router.post("/paypal/create", checkJwt, async (req, res) => {
   try {
     const planType = req.body.planType?.toLowerCase();
@@ -415,8 +400,8 @@ router.post("/paypal/create", checkJwt, async (req, res) => {
     // Find internal user
     const auth0Id = req.auth.sub;
     const userRes = await pool.query(
-      "SELECT id FROM users WHERE auth0_id = $1",
-      [auth0Id]
+        "SELECT id FROM users WHERE auth0_id = $1",
+        [auth0Id]
     );
 
     if (!userRes.rows.length) {
@@ -424,14 +409,6 @@ router.post("/paypal/create", checkJwt, async (req, res) => {
     }
 
     const userId = userRes.rows[0].id;
-
-    // 🔍 DEBUG LOG (safe to keep during testing)
-    console.log("💳 Creating PayPal subscription:", {
-      userId,
-      planType,
-      planId: PAYPAL_PLANS[planType],
-    });
-
 
     const existing = await getActiveMembershipForUser(userId);
 
@@ -441,7 +418,6 @@ router.post("/paypal/create", checkJwt, async (req, res) => {
       });
     }
 
-
     // Create PayPal subscription
     const subscription = await createSubscription({
       planId: PAYPAL_PLANS[planType],
@@ -450,7 +426,7 @@ router.post("/paypal/create", checkJwt, async (req, res) => {
 
     // Return approval URL
     const approvalLink = subscription.links.find(
-      (l) => l.rel === "approve"
+        (l) => l.rel === "approve"
     )?.href;
 
     if (!approvalLink) {
@@ -459,11 +435,10 @@ router.post("/paypal/create", checkJwt, async (req, res) => {
 
     res.json({ approvalUrl: approvalLink });
   } catch (err) {
-    console.error("🔥 PayPal create error:", err.response?.data || err);
+    console.error("PayPal create error:", err.response?.data || err);
     res.status(500).json({ error: "Failed to create subscription" });
   }
 });
-
 
 router.getActiveMembershipForUser = getActiveMembershipForUser;
 module.exports = router;

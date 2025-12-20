@@ -3,7 +3,7 @@ const express = require('express');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const csrf = require('csurf');
-const path = require('path');              // ✅ for static uploads
+const path = require('path');
 require('dotenv').config();
 
 const { pool, healthCheck } = require('./db');
@@ -25,46 +25,37 @@ const newsletterRoutes = require('./routes/newsletter');
 const auditLogsRoutes = require('./routes/auditLogs');
 const messagesRouter = require("./routes/messages");
 
-
 // Import audit middleware
-const auditMiddleware = require('./middleware/auditMiddleware');  // NEW: Audit middleware
+const auditMiddleware = require('./middleware/auditMiddleware');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 const isProd = process.env.NODE_ENV === 'production';
 
-// Domain configuration - IMPORTANT: Use proper domain for cookies
+// Domain configuration
 const COOKIE_DOMAIN = isProd ? '.empowermedwellness.com' : undefined;
-
-console.log('🔧 Environment Configuration:');
-console.log('   NODE_ENV:', process.env.NODE_ENV);
-console.log('   Cookie Domain:', COOKIE_DOMAIN || 'localhost');
 
 /* ---------- Security hardening ---------- */
 app.set('trust proxy', 1);
 
 app.use(
-  helmet({
-    contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false,
-    // ✅ Allow images and other static assets to be loaded from another origin
-    // (e.g., frontend on 5173, backend on 5001)
-    crossOriginResourcePolicy: false,
-  })
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginEmbedderPolicy: false,
+      crossOriginResourcePolicy: false,
+    })
 );
 
-// PayPal Webhook 
+// PayPal Webhook
 app.use("/memberships/paypal/webhook", express.raw({ type: "application/json" }));
 
 app.use(express.json());
 app.use(cookieParser());
 
-/* ---------- Static uploads (for event images etc.) ---------- */
-// ✅ serve /uploads/... from <project-root>/uploads
-//    (matches admin.js which writes to path.join(__dirname, 'uploads', 'events'))
+/* ---------- Static uploads ---------- */
 app.use(
-  '/uploads',
-  express.static(path.join(__dirname, 'uploads'))  // 🔁 using __dirname + 'uploads'
+    '/uploads',
+    express.static(path.join(__dirname, 'uploads'))
 );
 
 /* ---------- CORS Configuration ---------- */
@@ -88,15 +79,14 @@ const corsMiddleware = (req, res, next) => {
 
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader(
-    'Access-Control-Allow-Headers',
-    'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-XSRF-TOKEN, X-CSRF-Token, X-Internal-API-Key'
+      'Access-Control-Allow-Headers',
+      'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-XSRF-TOKEN, X-CSRF-Token, X-Internal-API-Key'
   );
   res.setHeader(
-    'Access-Control-Allow-Methods',
-    'GET, POST, PATCH, PUT, DELETE, OPTIONS'
+      'Access-Control-Allow-Methods',
+      'GET, POST, PATCH, PUT, DELETE, OPTIONS'
   );
 
-  // Handle OPTIONS requests (preflight)
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -119,28 +109,13 @@ app.get('/health/db', async (_req, res) => {
   }
 });
 
-// Debug endpoint
-app.get('/debug/cookies', (req, res) => {
-  res.json({
-    cookies: req.cookies,
-    headers: {
-      origin: req.headers.origin,
-      cookie: req.headers.cookie,
-    },
-    environment: {
-      NODE_ENV: process.env.NODE_ENV,
-      cookieDomain: COOKIE_DOMAIN,
-    },
-  });
-});
-
 /* ---------- CSRF Protection ---------- */
 const csrfProtection = csrf({
   cookie: {
     httpOnly: true,
-    sameSite: isProd ? 'none' : 'lax', // 'none' for cross-origin subdomains
-    secure: isProd,                   // Must be true with sameSite: 'none'
-    domain: COOKIE_DOMAIN,            // Root domain for subdomain sharing
+    sameSite: isProd ? 'none' : 'lax',
+    secure: isProd,
+    domain: COOKIE_DOMAIN,
     path: '/',
   },
 });
@@ -150,40 +125,33 @@ const csrfSkipMiddleware = (req, res, next) => {
   const fullPath = req.originalUrl || req.url;
 
   if (
-    fullPath.startsWith('/internal') ||
-    fullPath.startsWith('/auth') ||
-    fullPath.startsWith('/api/blog') ||
-    fullPath.startsWith('/api/events') ||        // public events API
-    fullPath === '/csrf-token' ||
-    fullPath === '/health' ||
-    fullPath === '/health/db' ||
-    fullPath === '/debug/cookies' ||
-    fullPath === '/' ||
-    fullPath.startsWith('/api/newsletter') ||
-    fullPath.startsWith('/api/audit') ||         // Skip CSRF for audit logs API
-    fullPath.startsWith('/calendar') ||
-    fullPath.startsWith('/memberships') ||
-    fullPath.startsWith('/messages')
-
+      fullPath.startsWith('/internal') ||
+      fullPath.startsWith('/auth') ||
+      fullPath.startsWith('/api/blog') ||
+      fullPath.startsWith('/api/events') ||
+      fullPath === '/csrf-token' ||
+      fullPath === '/health' ||
+      fullPath === '/health/db' ||
+      fullPath === '/' ||
+      fullPath.startsWith('/api/newsletter') ||
+      fullPath.startsWith('/api/audit') ||
+      fullPath.startsWith('/calendar') ||
+      fullPath.startsWith('/memberships') ||
+      fullPath.startsWith('/messages')
   ) {
-    console.log(`🔓 Skipping CSRF for: ${fullPath}`);
     return next();
   }
 
-  console.log(`🔐 Applying CSRF for: ${fullPath}`);
   return csrfProtection(req, res, next);
 };
 
 // Apply the CSRF skip middleware BEFORE mounting routes
 app.use(csrfSkipMiddleware);
 
-// CSRF token endpoint - MUST use csrfProtection to generate token
+// CSRF token endpoint
 app.get('/csrf-token', csrfProtection, (req, res) => {
   const token = req.csrfToken();
 
-  console.log('🔐 Generated CSRF token for origin:', req.headers.origin);
-
-  // Set cookie that JavaScript can read
   res.cookie('XSRF-TOKEN', token, {
     httpOnly: false,
     sameSite: isProd ? 'none' : 'lax',
@@ -208,7 +176,6 @@ app.post('/csrf-test', csrfProtection, (req, res) => {
 });
 
 /* ---------- Apply audit middleware ---------- */
-// Note: This comes AFTER CSRF but BEFORE routes
 app.use(auditMiddleware);
 
 /* ---------- API routes ---------- */
@@ -218,32 +185,28 @@ app.use('/internal', syncRoutes);
 app.use('/auth', authRoutes);
 app.use('/calendar', calendarRoutes);
 app.use('/api/blog', blogRoutes);
-app.use('/api/events', eventsRoutes);   // public events routes (list for Events page)
+app.use('/api/events', eventsRoutes);
 app.use('/memberships', membershipRoutes);
 app.use('/api/profile', profileRoutes);
-app.use('/api/admin', adminRoutes);     // admin routes (includes /api/admin/events)
+app.use('/api/admin', adminRoutes);
 app.use('/api', catalogRouter);
 app.use('/api/education', educationRouter);
-
-// NEW: Add audit logs routes (protected by admin middleware)
 app.use('/api/audit', auditLogsRoutes);
 
 app.use(
-  '/messages',
-  checkJwt,
-  attachUser,
-  messagesRouter
+    '/messages',
+    checkJwt,
+    attachUser,
+    messagesRouter
 );
-
 
 /* ---------- Error Handling ---------- */
 app.use((err, req, res, next) => {
-  console.error('🚨 Error:', {
+  console.error('Error:', {
     name: err.name,
     code: err.code,
     message: err.message,
     path: req.path,
-    originalUrl: req.originalUrl,
     timestamp: new Date().toISOString(),
   });
 
@@ -252,16 +215,6 @@ app.use((err, req, res, next) => {
   }
 
   if (err.code === 'EBADCSRFTOKEN') {
-    console.log('🔍 CSRF Error Details:', {
-      path: req.path,
-      originalUrl: req.originalUrl,
-      headers: {
-        'x-xsrf-token': req.headers['x-xsrf-token'] ? 'present' : 'missing',
-        cookie: req.headers.cookie ? 'present' : 'missing',
-      },
-      cookies: req.cookies,
-    });
-
     return res.status(403).json({
       error: 'Invalid CSRF token',
       details: 'Please refresh the page',
@@ -278,16 +231,7 @@ app.use((err, req, res, next) => {
 
 /* ---------- Start Server ---------- */
 const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`
-🚀 EmpowerMed Backend Started
-📡 Port: ${PORT}
-🌐 Environment: ${process.env.NODE_ENV}
-🔐 CSRF Protection: Enabled
-🔍 Audit Logging: Enabled
-🍪 Cookie Domain: ${COOKIE_DOMAIN || 'localhost'}
-🔒 Secure Cookies: ${isProd}
-🎯 Allowed Origins: ${allowedOrigins.join(', ')}
-  `);
+  console.log(`Server started on port ${PORT}`);
 });
 
 process.on('SIGTERM', shutdown);
@@ -298,13 +242,13 @@ function shutdown() {
   server.close(() => pool.end(() => process.exit(0)));
 }
 
-/* ---------- Log DB Local Connection ---------- */
+/* ---------- Log DB Connection ---------- */
 (async () => {
   try {
     const { rows } = await pool.query('SELECT NOW() AS now');
-    console.log('✅ Database connected @', rows[0].now);
+    console.log('Database connected');
   } catch (err) {
-    console.error('❌ Database connection error:', err.message);
+    console.error('Database connection error:', err.message);
   }
 })();
 

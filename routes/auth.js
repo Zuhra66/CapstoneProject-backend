@@ -18,7 +18,6 @@ const getActiveMembershipForUser = membershipRoutes.getActiveMembershipForUser;
  */
 async function getCompleteUserProfile(access_token) {
   try {
-    console.log('🔍 Fetching complete user profile from Auth0...');
     const response = await axios.get(`https://${process.env.AUTH0_DOMAIN}/userinfo`, {
       headers: {
         Authorization: `Bearer ${access_token}`,
@@ -27,16 +26,11 @@ async function getCompleteUserProfile(access_token) {
       timeout: 10000
     });
 
-    console.log('✅ Full user profile received:', response.data);
     return response.data;
   } catch (error) {
-    console.error('❌ Failed to fetch userinfo from Auth0:', error.message);
-    console.error('❌ Auth0 response:', error.response?.data);
-
     // Fallback to JWT decoding if userinfo endpoint fails
     const jwt = require('jsonwebtoken');
     const decoded = jwt.decode(access_token);
-    console.log('🔄 Falling back to JWT decoding:', decoded);
     return decoded || {};
   }
 }
@@ -64,18 +58,6 @@ async function upsertUserFromAuth0(profile) {
   const first_name = profile.given_name || profile.first_name || '';
   const last_name = profile.family_name || profile.last_name || '';
 
-  console.log('🔄 Upserting user from Auth0 with complete profile:', {
-    auth0_id,
-    auth_provider,
-    auth_sub,
-    email,
-    name,
-    first_name,
-    last_name,
-    hasEmail: !!profile.email,
-    hasName: !!profile.name
-  });
-
   try {
     // Check if user exists to preserve admin status
     const existingUser = await pool.query(
@@ -90,7 +72,6 @@ async function upsertUserFromAuth0(profile) {
       // Preserve existing role and admin status
       role = existingUser.rows[0].role || 'User';
       is_admin = existingUser.rows[0].is_admin === true;
-      console.log('📋 Found existing user:', { role, is_admin });
     }
 
     const result = await pool.query(`
@@ -114,18 +95,9 @@ async function upsertUserFromAuth0(profile) {
     ]);
 
     const user = { ...result.rows[0], auth0_id };
-    console.log('✅ User upserted successfully:', {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      is_admin: user.is_admin,
-      created_at: user.created_at,
-      updated_at: user.updated_at
-    });
     return user;
   } catch (error) {
-    console.error('❌ Database error in upsertUserFromAuth0:', error);
+    console.error('Database error in upsertUserFromAuth0:', error);
     throw error;
   }
 }
@@ -135,82 +107,57 @@ async function upsertUserFromAuth0(profile) {
 // GET /auth/me - Get current user info using Bearer token
 router.get('/me', checkJwt, async (req, res) => {
   try {
-    console.log('🔐 /auth/me called');
-
     // Check if token is present and valid
     if (!req.auth || !req.auth.sub) {
-      console.log('❌ No valid JWT token found');
       return res.status(200).json({ user: null, error: 'No valid authentication token' });
     }
 
     const accessToken = getAccessTokenFromHeader(req);
     if (!accessToken) {
-      console.log('❌ No access token found in header');
       return res.status(401).json({ user: null, error: 'No access token provided' });
     }
-
-    console.log('👤 Auth0 JWT payload (basic):', {
-      sub: req.auth.sub,
-      email: req.auth.email
-    });
 
     // Get complete user profile from Auth0 userinfo endpoint
     const completeProfile = await getCompleteUserProfile(accessToken);
 
     if (!completeProfile.sub) {
-      console.log('❌ No user sub in complete profile');
       return res.status(401).json({ user: null, error: 'Invalid user profile' });
     }
 
-    console.log('👤 Complete user profile:', {
-      sub: completeProfile.sub,
-      email: completeProfile.email,
-      name: completeProfile.name,
-      given_name: completeProfile.given_name,
-      family_name: completeProfile.family_name
-    });
-
     const user = await upsertUserFromAuth0(completeProfile);
 
-    console.log("🔐 Logged-in user:", user);
     const rawMembership = await getActiveMembershipForUser(user.id);
 
-const membership = rawMembership
-  ? {
-      id: rawMembership.id,
-      status: rawMembership.status,
-      provider: rawMembership.provider,
-      plan_name: rawMembership.plan_name,
-      plan_slug: rawMembership.plan_slug,
-      start_date: rawMembership.start_at,   
-      end_date: rawMembership.end_at,       
-      interval: rawMembership.interval,
-      paypal_subscription_id: rawMembership.paypal_subscription_id
-    }
-  : null;
-
+    const membership = rawMembership
+        ? {
+          id: rawMembership.id,
+          status: rawMembership.status,
+          provider: rawMembership.provider,
+          plan_name: rawMembership.plan_name,
+          plan_slug: rawMembership.plan_slug,
+          start_date: rawMembership.start_at,
+          end_date: rawMembership.end_at,
+          interval: rawMembership.interval,
+          paypal_subscription_id: rawMembership.paypal_subscription_id
+        }
+        : null;
 
     /* -------------------------------------------
-      🔗 AUTO-LINK EXISTING APPOINTMENTS BY EMAIL - MAY NEED TO REMOVE WILL TEST FURTHER
+      AUTO-LINK EXISTING APPOINTMENTS BY EMAIL
     ------------------------------------------- */
     try {
       // Normalize both sides
       const normalizedEmail = user.email.trim().toLowerCase();
-      console.log("🔗 Normalized email for linking:", normalizedEmail);
 
       const linkRes = await pool.query(
           `UPDATE appointments
-        SET user_id = $1, updated_at = NOW()
-        WHERE LOWER(TRIM(email)) = $2 AND user_id IS NULL`,
+          SET user_id = $1, updated_at = NOW()
+          WHERE LOWER(TRIM(email)) = $2 AND user_id IS NULL`,
           [user.id, normalizedEmail]
       );
-
-      console.log(`🔗 Linked ${linkRes.rowCount} appointments to user ${user.email}`);
     } catch (err) {
-      console.error("❌ Linking error:", err);
+      // Silent fail for appointment linking
     }
-
-    console.log('✅ Authentication successful for user:', user.email);
 
     res.json({
       user: {
@@ -229,8 +176,7 @@ const membership = rawMembership
       }
     });
   } catch (err) {
-    console.error('❌ /me error:', err.message);
-    console.error('❌ Full error details:', err);
+    console.error('/me error:', err.message);
 
     if (err.name === 'UnauthorizedError') {
       return res.status(401).json({
@@ -257,8 +203,8 @@ router.get("/me/messages", checkJwt, async (req, res) => {
 
     // Get DB user
     const userRes = await pool.query(
-      "SELECT id, role, is_admin FROM users WHERE auth0_id = $1",
-      [auth0Id]
+        "SELECT id, role, is_admin FROM users WHERE auth0_id = $1",
+        [auth0Id]
     );
 
     if (userRes.rows.length === 0) {
@@ -269,21 +215,21 @@ router.get("/me/messages", checkJwt, async (req, res) => {
     const isAdmin = user.is_admin === true;
 
     const result = isAdmin
-      ? await pool.query(`
+        ? await pool.query(`
           SELECT *
           FROM contact_messages
           WHERE deleted_at IS NULL
           ORDER BY created_at ASC
         `)
-      : await pool.query(
-          `
+        : await pool.query(
+            `
           SELECT *
           FROM contact_messages
           WHERE (sender_id = $1 OR receiver_id = $1)
             AND deleted_at IS NULL
           ORDER BY created_at ASC
         `,
-          [user.id]
+            [user.id]
         );
 
     const messages = result.rows.map(row => ({
@@ -302,15 +248,13 @@ router.get("/me/messages", checkJwt, async (req, res) => {
 
     res.json({ messages });
   } catch (err) {
-    console.error("❌ /auth/me/messages error:", err);
+    console.error("/auth/me/messages error:", err);
     res.status(500).json({ messages: [], error: "Failed to load messages" });
   }
 });
 
-
 // POST /auth/logout
 router.post('/logout', (req, res) => {
-  console.log('🚪 Clearing auth cookies');
   res.clearCookie('refresh_token');
   res.clearCookie('access_token');
   res.json({ message: 'Logged out successfully' });

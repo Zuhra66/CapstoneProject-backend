@@ -66,44 +66,6 @@ if (process.env.NODE_ENV !== 'production') {
       ]
     });
   });
-
-  router.get('/verify/test', (req, res) => {
-    res.send(`<!DOCTYPE html>
-      <html>
-      <head>
-        <title>Test Verification - EmpowerMEd</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f8f9fa; color: #333; }
-          .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-          h1 { color: #3D52A0; margin-bottom: 20px; }
-          .success { color: #28a745; font-size: 48px; margin: 20px 0; }
-          .btn { display: inline-block; background: #3D52A0; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; margin-top: 20px; font-weight: bold; }
-          .logo-img { max-width: 150px; height: auto; margin: 20px auto; display: block; border: 1px solid #ddd; padding: 5px; }
-          .debug-info { text-align: left; background: #f0f5ff; padding: 15px; border-radius: 5px; margin: 20px 0; font-family: monospace; font-size: 12px; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="success">✅</div>
-          <h1>Verification Route is Working!</h1>
-          <p>This is a development-only test route.</p>
-          <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img" onerror="this.onerror=null; this.style.display='none'; console.log('Logo failed to load:', this.src);">
-          <div class="debug-info">
-            <p><strong>Logo URL:</strong> ${LOGO_URL}</p>
-            <p><strong>Environment:</strong> development</p>
-            <p><strong>Backend URL:</strong> ${BACKEND_BASE}</p>
-            <p><strong>Frontend URL:</strong> ${FRONTEND_BASE}</p>
-          </div>
-          <a href="${FRONTEND_BASE}" class="btn">Return to Website</a>
-        </div>
-        <script>
-          console.log('Logo URL:', '${LOGO_URL}');
-          console.log('Environment:', 'development');
-        </script>
-      </body>
-      </html>`);
-  });
 }
 
 const sendVerificationEmail = async (email, name, token) => {
@@ -163,7 +125,7 @@ const sendVerificationEmail = async (email, name, token) => {
       await sgMail.send(msg);
       return { success: true, message: 'Verification email sent', email };
     } else {
-      console.log(`[EMAIL LOG] Verification link for ${email}: ${verificationLink}`);
+      console.log(`Verification link for ${email}: ${verificationLink}`);
       return { success: true, message: 'Verification email logged', email };
     }
 
@@ -211,7 +173,7 @@ const sendWelcomeEmail = async (email, name, unsubscribeToken) => {
             <img src="${LOGO_URL}" alt="EmpowerMEd Logo" class="logo-img" onerror="this.style.display='none'">
           </div>
           <div class="content">
-            <h2>🎉 Welcome to Our Wellness Community!</h2>
+            <h2>Welcome to Our Wellness Community!</h2>
             <p>Hello ${name || 'wellness enthusiast'},</p>
             <p>Your subscription to EmpowerMEd updates has been confirmed. We're excited to have you join our community!</p>
             
@@ -246,7 +208,7 @@ const sendWelcomeEmail = async (email, name, unsubscribeToken) => {
       await sgMail.send(msg);
       return { success: true, message: 'Welcome email sent', email };
     } else {
-      console.log(`[EMAIL LOG] Welcome email would be sent to: ${email}`);
+      console.log(`Welcome email would be sent to: ${email}`);
       return { success: true, message: 'Welcome email logged', email };
     }
 
