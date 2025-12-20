@@ -26,16 +26,16 @@ fs.mkdirSync(eventsUploadDir, { recursive: true });
 fs.mkdirSync(educationUploadDir, { recursive: true });
 
 const makeDiskStorage = (destinationDir) =>
-  multer.diskStorage({
-    destination: (req, file, cb) => {
-      cb(null, destinationDir);
-    },
-    filename: (req, file, cb) => {
-      const safeName = file.originalname.replace(/[^\w.-]/g, '_');
-      const ts = Date.now();
-      cb(null, `${ts}-${safeName}`);
-    },
-  });
+    multer.diskStorage({
+      destination: (req, file, cb) => {
+        cb(null, destinationDir);
+      },
+      filename: (req, file, cb) => {
+        const safeName = file.originalname.replace(/[^\w.-]/g, '_');
+        const ts = Date.now();
+        cb(null, `${ts}-${safeName}`);
+      },
+    });
 
 // ✅ Allow images *and* PDFs
 function fileFilter(req, file, cb) {
@@ -50,10 +50,10 @@ function fileFilter(req, file, cb) {
 
   if (!allowedMimeTypes.includes(file.mimetype)) {
     return cb(
-      new Error(
-        'Only image files (PNG, JPG, JPEG, WebP, GIF) or PDF files are allowed.'
-      ),
-      false
+        new Error(
+            'Only image files (PNG, JPG, JPEG, WebP, GIF) or PDF files are allowed.'
+        ),
+        false
     );
   }
 
@@ -71,7 +71,9 @@ const educationUpload = multer({
   fileFilter,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
 });
+
 // ---------- end upload config ----------
+
 // -------------------------------------
 // Global admin middleware
 // -------------------------------------
@@ -89,10 +91,10 @@ function toInt(v, fallback = null) {
 
 function makeSlug(s) {
   return String(s || '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '-')
-    .replace(/[^a-z0-9-]/g, '');
+  .trim()
+  .toLowerCase()
+  .replace(/\s+/g, '-')
+  .replace(/[^a-z0-9-]/g, '');
 }
 
 // helper for education tags: "tag1, tag2" -> ["tag1", "tag2"]
@@ -100,9 +102,9 @@ function parseTags(tagsStr) {
   if (!tagsStr) return [];
   if (Array.isArray(tagsStr)) return tagsStr;
   return String(tagsStr)
-    .split(',')
-    .map((t) => t.trim())
-    .filter(Boolean);
+  .split(',')
+  .map((t) => t.trim())
+  .filter(Boolean);
 }
 
 // ensure product slug is unique
@@ -113,8 +115,8 @@ async function ensureUniqueProductSlug(baseSlug) {
 
   while (true) {
     const { rows } = await dbPool.query(
-      'SELECT 1 FROM public.products WHERE slug = $1 LIMIT 1',
-      [slug]
+        'SELECT 1 FROM public.products WHERE slug = $1 LIMIT 1',
+        [slug]
     );
 
     if (rows.length === 0) return slug;
@@ -132,44 +134,38 @@ let tokenExpiry = null;
 
 const getManagementApiToken = async () => {
   if (managementApiToken && tokenExpiry && Date.now() < tokenExpiry - 300000) {
-    console.log('🔄 Using cached Management API token');
     return managementApiToken;
   }
 
   try {
-    console.log('🔄 Getting new Management API token...');
-
     const managementApiAudience =
-      process.env.AUTH0_MANAGEMENT_AUDIENCE ||
-      `https://${process.env.AUTH0_DOMAIN}/api/v2/`;
+        process.env.AUTH0_MANAGEMENT_AUDIENCE ||
+        `https://${process.env.AUTH0_DOMAIN}/api/v2/`;
 
     if (!managementApiAudience) {
       throw new Error(
-        'AUTH0_MANAGEMENT_AUDIENCE environment variable is not set'
+          'AUTH0_MANAGEMENT_AUDIENCE environment variable is not set'
       );
     }
 
     const response = await fetch(
-      `https://${process.env.AUTH0_DOMAIN}/oauth/token`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_id: process.env.AUTH0_MANAGEMENT_CLIENT_ID,
-          client_secret: process.env.AUTH0_MANAGEMENT_CLIENT_SECRET,
-          audience: managementApiAudience,
-          grant_type: 'client_credentials',
-        }),
-      }
+        `https://${process.env.AUTH0_DOMAIN}/oauth/token`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_id: process.env.AUTH0_MANAGEMENT_CLIENT_ID,
+            client_secret: process.env.AUTH0_MANAGEMENT_CLIENT_SECRET,
+            audience: managementApiAudience,
+            grant_type: 'client_credentials',
+          }),
+        }
     );
-
-    console.log('🔧 Token response status:', response.status);
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('🔧 Token error response:', errorText);
       throw new Error(
-        `Failed to get Management API token: ${response.status} ${errorText}`
+          `Failed to get Management API token: ${response.status} ${errorText}`
       );
     }
 
@@ -178,10 +174,9 @@ const getManagementApiToken = async () => {
     managementApiToken = data.access_token;
     tokenExpiry = Date.now() + data.expires_in * 1000;
 
-    console.log('✅ New Management API token acquired');
     return managementApiToken;
   } catch (error) {
-    console.error('❌ Error getting Management API token:', error);
+    console.error('Error getting Management API token:', error);
     throw error;
   }
 };
@@ -190,140 +185,113 @@ const getAuth0RoleId = async (roleName) => {
   const token = await getManagementApiToken();
 
   const response = await fetch(
-    `https://${process.env.AUTH0_DOMAIN}/api/v2/roles`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-    }
+      `https://${process.env.AUTH0_DOMAIN}/api/v2/roles`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      }
   );
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.error('❌ Failed to fetch roles:', errorText);
     throw new Error(`Failed to fetch roles: ${response.status} ${errorText}`);
   }
 
   const roles = await response.json();
-  console.log('🔧 Available Auth0 roles:', roles.map((r) => r.name));
-
   const role = roles.find((r) => r.name === roleName);
 
   if (!role) {
-    console.error(
-      `❌ Role "${roleName}" not found in Auth0. Available roles:`,
-      roles.map((r) => r.name)
-    );
     throw new Error(
-      `Role "${roleName}" not found in Auth0. Available roles: ${roles
+        `Role "${roleName}" not found in Auth0. Available roles: ${roles
         .map((r) => r.name)
         .join(', ')}`
     );
   }
 
-  console.log(`✅ Found Auth0 role "${roleName}" with ID: ${role.id}`);
   return role.id;
 };
 
 const updateAuth0UserRoles = async (auth0UserId, roleName) => {
   try {
-    console.log('🔄 Updating Auth0 roles for user:', auth0UserId);
-    console.log('🔧 New role to assign:', roleName);
-
     const token = await getManagementApiToken();
 
     const getRolesResponse = await fetch(
-      `https://${process.env.AUTH0_DOMAIN}/api/v2/users/${encodeURIComponent(
-        auth0UserId
-      )}/roles`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      }
+        `https://${process.env.AUTH0_DOMAIN}/api/v2/users/${encodeURIComponent(
+            auth0UserId
+        )}/roles`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        }
     );
 
     if (!getRolesResponse.ok) {
       const errorText = await getRolesResponse.text();
-      console.error('❌ Failed to get user roles:', errorText);
       throw new Error(
-        `Failed to get user roles: ${getRolesResponse.status} ${errorText}`
+          `Failed to get user roles: ${getRolesResponse.status} ${errorText}`
       );
     }
 
     const currentRoles = await getRolesResponse.json();
-    console.log('🔧 Current Auth0 roles:', currentRoles.map((r) => r.name));
-
     const newRoleId = await getAuth0RoleId(roleName);
 
     if (currentRoles.length > 0) {
       const roleIdsToRemove = currentRoles.map((role) => role.id);
 
-      console.log('🔧 Removing roles:', roleIdsToRemove);
-
       const removeResponse = await fetch(
-        `https://${process.env.AUTH0_DOMAIN}/api/v2/users/${encodeURIComponent(
-          auth0UserId
-        )}/roles`,
-        {
-          method: 'DELETE',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ roles: roleIdsToRemove }),
-        }
+          `https://${process.env.AUTH0_DOMAIN}/api/v2/users/${encodeURIComponent(
+              auth0UserId
+          )}/roles`,
+          {
+            method: 'DELETE',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ roles: roleIdsToRemove }),
+          }
       );
 
       if (!removeResponse.ok) {
         const errorText = await removeResponse.text();
-        console.error('❌ Failed to remove roles:', errorText);
         throw new Error(
-          `Failed to remove roles: ${removeResponse.status} ${errorText}`
+            `Failed to remove roles: ${removeResponse.status} ${errorText}`
         );
       }
-      console.log('✅ Removed existing roles');
     }
 
-    console.log('🔧 Adding role ID:', newRoleId);
-
     const addResponse = await fetch(
-      `https://${process.env.AUTH0_DOMAIN}/api/v2/users/${encodeURIComponent(
-        auth0UserId
-      )}/roles`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ roles: [newRoleId] }),
-      }
+        `https://${process.env.AUTH0_DOMAIN}/api/v2/users/${encodeURIComponent(
+            auth0UserId
+        )}/roles`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ roles: [newRoleId] }),
+        }
     );
 
     if (!addResponse.ok) {
       const errorText = await addResponse.text();
-      console.error('❌ Failed to add role:', errorText);
-      throw new Error(
-        `Failed to add role: ${addResponse.status} ${errorText}`
-      );
+      throw new Error(`Failed to add role: ${addResponse.status} ${errorText}`);
     }
 
-    console.log('✅ Added new role:', roleName);
     return true;
   } catch (error) {
-    console.error('❌ Error updating Auth0 roles:', error);
+    console.error('Error updating Auth0 roles:', error);
     throw error;
   }
 };
 
 const updateAuth0User = async (auth0UserId, userData) => {
   try {
-    console.log('🔄 Starting Auth0 update for:', auth0UserId);
-    console.log('🔧 User data for Auth0:', userData);
-
     const token = await getManagementApiToken();
 
     const auth0UpdatePayload = {
@@ -343,8 +311,6 @@ const updateAuth0User = async (auth0UserId, userData) => {
     }
 
     const isGoogleUser = auth0UserId.startsWith('google-oauth2|');
-    console.log('🔧 Is Google OAuth2 user:', isGoogleUser);
-
     if (isGoogleUser) {
       delete auth0UpdatePayload.email;
       delete auth0UpdatePayload.given_name;
@@ -359,23 +325,17 @@ const updateAuth0User = async (auth0UserId, userData) => {
     });
 
     if (
-      auth0UpdatePayload.app_metadata &&
-      Object.keys(auth0UpdatePayload.app_metadata).length === 0
+        auth0UpdatePayload.app_metadata &&
+        Object.keys(auth0UpdatePayload.app_metadata).length === 0
     ) {
       delete auth0UpdatePayload.app_metadata;
     }
 
-    console.log(
-      '🔧 Auth0 profile update payload:',
-      JSON.stringify(auth0UpdatePayload, null, 2)
-    );
-
     const apiDomain =
-      process.env.AUTH0_CUSTOM_DOMAIN || process.env.AUTH0_DOMAIN;
+        process.env.AUTH0_CUSTOM_DOMAIN || process.env.AUTH0_DOMAIN;
     const apiUrl = `https://${apiDomain}/api/v2/users/${encodeURIComponent(
-      auth0UserId
+        auth0UserId
     )}`;
-    console.log('🔧 Auth0 API URL:', apiUrl);
 
     const response = await fetch(apiUrl, {
       method: 'PATCH',
@@ -387,33 +347,26 @@ const updateAuth0User = async (auth0UserId, userData) => {
       body: JSON.stringify(auth0UpdatePayload),
     });
 
-    console.log('🔧 Auth0 profile update response status:', response.status);
-
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(
-        `Auth0 profile update failed: ${response.status} ${errorText}`
+          `Auth0 profile update failed: ${response.status} ${errorText}`
       );
     }
 
     const result = await response.json();
-    console.log('✅ Auth0 profile updated successfully');
 
     if (userData.role) {
       try {
         await updateAuth0UserRoles(auth0UserId, userData.role);
-        console.log('✅ Auth0 roles updated successfully');
       } catch (roleError) {
-        console.error(
-          '⚠️ Auth0 role update failed (profile still updated):',
-          roleError.message
-        );
+        console.error('Auth0 role update failed (profile still updated):', roleError.message);
       }
     }
 
     return result;
   } catch (error) {
-    console.error('❌ Error updating Auth0 user:', error);
+    console.error('Error updating Auth0 user:', error);
     throw error;
   }
 };
@@ -424,16 +377,16 @@ const updateAuth0User = async (auth0UserId, userData) => {
 function isUuidLike(value) {
   if (typeof value !== 'string') return false;
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-    value
+      value
   );
 }
 
 const logAdminAction = async (
-  adminUserId,
-  actionType,
-  targetId = null,
-  details = {},
-  req = null
+    adminUserId,
+    actionType,
+    targetId = null,
+    details = {},
+    req = null
 ) => {
   try {
     const ip = req?.ip || details.ip || null;
@@ -443,10 +396,10 @@ const logAdminAction = async (
     const targetUserIdForLog = isUuidLike(targetId) ? targetId : null;
 
     await dbPool.query(
-      `INSERT INTO public.admin_audit_logs
+        `INSERT INTO public.admin_audit_logs
          (admin_user_id, action_type, target_user_id, details, ip_address, user_agent)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [adminIdForLog, actionType, targetUserIdForLog, details, ip, ua]
+        [adminIdForLog, actionType, targetUserIdForLog, details, ip, ua]
     );
   } catch (error) {
     console.error('Failed to log admin action:', error);
@@ -456,14 +409,14 @@ const logAdminAction = async (
 const syncMembershipWithRole = async (userId, newRole, isActive) => {
   try {
     const { rows } = await dbPool.query(
-      `
+        `
       SELECT id, status, provider, paypal_subscription_id
       FROM user_memberships
       WHERE user_id = $1
       ORDER BY updated_at DESC
       LIMIT 1
       `,
-      [userId]
+        [userId]
     );
 
     if (!rows.length) return newRole;
@@ -478,55 +431,43 @@ const syncMembershipWithRole = async (userId, newRole, isActive) => {
     // -----------------------------
     //  CANCEL CONDITIONS
     // -----------------------------
-
     const shouldCancel =
-      !isActive ||               // user deactivated
-      newRole !== "Member";      // role downgraded
+        !isActive ||               // user deactivated
+        newRole !== "Member";      // role downgraded
 
     if (shouldCancel && isActiveMembership) {
-      console.log("🛑 Cancelling membership for user:", userId);
-
-      // Cancel PayPal subscription (STOP BILLING)
       // Cancel PayPal subscription (STOP BILLING)
       if (
-        membership.provider === "paypal" &&
-        membership.paypal_subscription_id
-      ) {
-        console.log(
-          "🔔 Cancelling PayPal subscription:",
+          membership.provider === "paypal" &&
           membership.paypal_subscription_id
-        );
-
+      ) {
         try {
           await cancelPaypalSubscription(membership.paypal_subscription_id);
         } catch (paypalErr) {
           console.error(
-            "⚠️ PayPal cancellation failed (continuing local cancel):",
-            paypalErr.message
+              "PayPal cancellation failed (continuing local cancel):",
+              paypalErr.message
           );
-          // Do NOT throw — access must still be revoked
         }
       }
 
-      // ✅ Always cancel locally
+      // Always cancel locally
       await dbPool.query(
-        `
+          `
         UPDATE user_memberships
         SET status = 'cancelled',
             end_at = NOW(),
             updated_at = NOW()
         WHERE id = $1
         `,
-        [membership.id]
+          [membership.id]
       );
-
-      console.log("✅ Membership cancelled locally");
     }
 
     // NEVER ACTIVATE THROUGH ADMIN
     return newRole;
   } catch (err) {
-    console.error("❌ syncMembershipWithRole error:", err);
+    console.error("syncMembershipWithRole error:", err);
     return newRole;
   }
 };
@@ -539,8 +480,8 @@ router.get('/debug-user/:userId', async (req, res) => {
     const { userId } = req.params;
 
     const userResult = await dbPool.query(
-      'SELECT id, auth0_id, email, first_name, last_name, name, is_active, role, is_admin FROM public.users WHERE id = $1',
-      [userId]
+        'SELECT id, auth0_id, email, first_name, last_name, name, is_active, role, is_admin FROM public.users WHERE id = $1',
+        [userId]
     );
 
     if (userResult.rows.length === 0) {
@@ -558,16 +499,16 @@ router.get('/debug-user/:userId', async (req, res) => {
       try {
         const token = await getManagementApiToken();
         const apiDomain =
-          process.env.AUTH0_CUSTOM_DOMAIN || process.env.AUTH0_DOMAIN;
+            process.env.AUTH0_CUSTOM_DOMAIN || process.env.AUTH0_DOMAIN;
 
         const allRolesResponse = await fetch(
-          `https://${apiDomain}/api/v2/roles`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-              Accept: 'application/json',
-            },
-          }
+            `https://${apiDomain}/api/v2/roles`,
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: 'application/json',
+              },
+            }
         );
 
         if (allRolesResponse.ok) {
@@ -575,30 +516,30 @@ router.get('/debug-user/:userId', async (req, res) => {
         }
 
         const userResponse = await fetch(
-          `https://${apiDomain}/api/v2/users/${encodeURIComponent(
-            user.auth0_id
-          )}`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-              Accept: 'application/json',
-            },
-          }
-        );
-
-        if (userResponse.ok) {
-          auth0UserData = await userResponse.json();
-
-          const rolesResponse = await fetch(
             `https://${apiDomain}/api/v2/users/${encodeURIComponent(
-              user.auth0_id
-            )}/roles`,
+                user.auth0_id
+            )}`,
             {
               headers: {
                 Authorization: `Bearer ${token}`,
                 Accept: 'application/json',
               },
             }
+        );
+
+        if (userResponse.ok) {
+          auth0UserData = await userResponse.json();
+
+          const rolesResponse = await fetch(
+              `https://${apiDomain}/api/v2/users/${encodeURIComponent(
+                  user.auth0_id
+              )}/roles`,
+              {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  Accept: 'application/json',
+                },
+              }
           );
 
           if (rolesResponse.ok) {
@@ -614,7 +555,7 @@ router.get('/debug-user/:userId', async (req, res) => {
           auth0Test = {
             success: false,
             message: `Auth0 API error: ${userResponse.status} - ${
-              errorData.message || errorData.error || userResponse.statusText
+                errorData.message || errorData.error || userResponse.statusText
             }`,
           };
         }
@@ -640,12 +581,12 @@ router.get('/debug-user/:userId', async (req, res) => {
       auth0_user_data: auth0UserData,
       auth0_roles: auth0RolesData,
       available_auth0_roles: allAuth0Roles
-        ? allAuth0Roles.map((r) => ({
+          ? allAuth0Roles.map((r) => ({
             id: r.id,
             name: r.name,
             description: r.description,
           }))
-        : null,
+          : null,
       environment: {
         has_domain: !!process.env.AUTH0_DOMAIN,
         has_custom_domain: !!process.env.AUTH0_CUSTOM_DOMAIN,
@@ -667,7 +608,7 @@ router.get('/dashboard-stats', async (req, res) => {
   try {
     const totalUsers = await dbPool.query('SELECT COUNT(*) FROM public.users');
     const activeUsers = await dbPool.query(
-      'SELECT COUNT(*) FROM public.users WHERE is_active = true'
+        'SELECT COUNT(*) FROM public.users WHERE is_active = true'
     );
     const newUsersThisMonth = await dbPool.query(`
       SELECT COUNT(*)
@@ -713,16 +654,16 @@ router.get('/dashboard-stats', async (req, res) => {
           today,
         ]),
         dbPool.query(
-          `SELECT COUNT(*) FROM audit_logs WHERE event_category = 'security'`
+            `SELECT COUNT(*) FROM audit_logs WHERE event_category = 'security'`
         ),
         dbPool.query(
-          `SELECT COUNT(*) FROM audit_logs WHERE event_category = 'authentication'`
+            `SELECT COUNT(*) FROM audit_logs WHERE event_category = 'authentication'`
         ),
         dbPool.query(
-          `SELECT COUNT(*) FROM audit_logs WHERE event_category = 'access'`
+            `SELECT COUNT(*) FROM audit_logs WHERE event_category = 'access'`
         ),
         dbPool.query(
-          `SELECT COUNT(*) FROM audit_logs WHERE event_category = 'modification'`
+            `SELECT COUNT(*) FROM audit_logs WHERE event_category = 'modification'`
         ),
       ]);
 
@@ -762,10 +703,10 @@ router.get('/dashboard-stats', async (req, res) => {
     // appointments stats
     try {
       const appointmentsTotal = await dbPool.query(
-        'SELECT COUNT(*) FROM public.appointments'
+          'SELECT COUNT(*) FROM public.appointments'
       );
       const appointmentsPending = await dbPool.query(
-        "SELECT COUNT(*) FROM public.appointments WHERE status = 'pending'"
+          "SELECT COUNT(*) FROM public.appointments WHERE status = 'pending'"
       );
       const appointmentsToday = await dbPool.query(`
         SELECT COUNT(*) FROM public.appointments
@@ -783,7 +724,7 @@ router.get('/dashboard-stats', async (req, res) => {
     // products stats
     try {
       const productsTotal = await dbPool.query(
-        'SELECT COUNT(*) FROM public.products'
+          'SELECT COUNT(*) FROM public.products'
       );
       stats.products.total = parseInt(productsTotal.rows[0].count) || 0;
     } catch (e) {
@@ -793,7 +734,7 @@ router.get('/dashboard-stats', async (req, res) => {
     // blog stats
     try {
       const blogTotal = await dbPool.query(
-        'SELECT COUNT(*) FROM public.blog_posts'
+          'SELECT COUNT(*) FROM public.blog_posts'
       );
       stats.blog.total = parseInt(blogTotal.rows[0].count) || 0;
     } catch (e) {
@@ -803,10 +744,10 @@ router.get('/dashboard-stats', async (req, res) => {
     // education stats
     try {
       const educationVideos = await dbPool.query(
-        'SELECT COUNT(*) FROM public.education_videos'
+          'SELECT COUNT(*) FROM public.education_videos'
       );
       const educationArticles = await dbPool.query(
-        'SELECT COUNT(*) FROM public.education_articles'
+          'SELECT COUNT(*) FROM public.education_articles'
       );
       stats.education = {
         videos: parseInt(educationVideos.rows[0].count) || 0,
@@ -819,7 +760,7 @@ router.get('/dashboard-stats', async (req, res) => {
     // categories stats
     try {
       const categoriesTotal = await dbPool.query(
-        'SELECT COUNT(*) FROM public.categories'
+          'SELECT COUNT(*) FROM public.categories'
       );
       stats.categories.total = parseInt(categoriesTotal.rows[0].count) || 0;
     } catch (e) {
@@ -829,7 +770,7 @@ router.get('/dashboard-stats', async (req, res) => {
     // events stats
     try {
       const totalEvents = await dbPool.query(
-        'SELECT COUNT(*) FROM public.events'
+          'SELECT COUNT(*) FROM public.events'
       );
       const upcomingEvents = await dbPool.query(`
         SELECT COUNT(*)
@@ -846,10 +787,10 @@ router.get('/dashboard-stats', async (req, res) => {
     // memberships stats
     try {
       const membershipPlans = await dbPool.query(
-        'SELECT COUNT(*) FROM public.membership_plans'
+          'SELECT COUNT(*) FROM public.membership_plans'
       );
       const activeMemberships = await dbPool.query(
-        "SELECT COUNT(*) FROM public.user_memberships WHERE status = 'active'"
+          "SELECT COUNT(*) FROM public.user_memberships WHERE status = 'active'"
       );
       stats.memberships = {
         plans: parseInt(membershipPlans.rows[0].count) || 0,
@@ -862,7 +803,7 @@ router.get('/dashboard-stats', async (req, res) => {
     // messages stats
     try {
       const messagesTotal = await dbPool.query(
-        'SELECT COUNT(*) FROM public.contact_messages'
+          'SELECT COUNT(*) FROM public.contact_messages'
       );
       stats.messages.total = parseInt(messagesTotal.rows[0].count) || 0;
     } catch (e) {
@@ -887,17 +828,16 @@ router.get('/dashboard-stats', async (req, res) => {
     }
 
     await logAdminAction(
-      req.adminUser.id,
-      'VIEW_DASHBOARD_STATS',
-      null,
-      {},
-      req
+        req.adminUser.id,
+        'VIEW_DASHBOARD_STATS',
+        null,
+        {},
+        req
     );
 
-    console.log('📊 Dashboard stats generated successfully');
     res.json(stats);
   } catch (error) {
-    console.error('❌ Dashboard stats error:', error);
+    console.error('Dashboard stats error:', error);
 
     res.json({
       users: { total: 1, active: 1, newThisMonth: 0 },
@@ -934,7 +874,7 @@ router.get('/education/articles', async (req, res) => {
     const adminUserId = req.adminUser.id;
 
     const { rows } = await dbPool.query(
-      `
+        `
         SELECT
           id,
           title,
@@ -951,11 +891,11 @@ router.get('/education/articles', async (req, res) => {
     );
 
     await logAdminAction(
-      adminUserId,
-      'ADMIN_LIST_EDUCATION_ARTICLES',
-      null,
-      {},
-      req
+        adminUserId,
+        'ADMIN_LIST_EDUCATION_ARTICLES',
+        null,
+        {},
+        req
     );
 
     res.json({ articles: rows });
@@ -965,7 +905,6 @@ router.get('/education/articles', async (req, res) => {
   }
 });
 
-// POST /api/admin/education/articles
 // POST /api/admin/education/articles
 router.post('/education/articles', educationUpload.single('file'), async (req, res) => {
   try {
@@ -986,19 +925,19 @@ router.post('/education/articles', educationUpload.single('file'), async (req, r
 
     const tagsArray = parseTags(tags);
     const minutesValue =
-      minutes === '' || minutes === null || minutes === undefined
-        ? null
-        : Number(minutes);
+        minutes === '' || minutes === null || minutes === undefined
+            ? null
+            : Number(minutes);
 
-    // ✅ If a file was uploaded, build URL like /uploads/education/filename
+    // If a file was uploaded, build URL like /uploads/education/filename
     const uploadedUrl = req.file
-      ? `/uploads/education/${req.file.filename}`
-      : null;
+        ? `/uploads/education/${req.file.filename}`
+        : null;
 
     const finalCoverUrl = uploadedUrl || (cover_url || '').trim() || null;
 
     const { rows } = await dbPool.query(
-      `
+        `
         INSERT INTO public.education_articles
           (title, summary, minutes, tags, cover_url, href, is_active)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -1013,25 +952,25 @@ router.post('/education/articles', educationUpload.single('file'), async (req, r
           is_active,
           created_at
       `,
-      [
-        title.trim(),
-        (summary || '').trim() || null,
-        Number.isFinite(minutesValue) ? minutesValue : null,
-        tagsArray,
-        finalCoverUrl,
-        (href || '').trim() || null,
-        !!is_active,
-      ]
+        [
+          title.trim(),
+          (summary || '').trim() || null,
+          Number.isFinite(minutesValue) ? minutesValue : null,
+          tagsArray,
+          finalCoverUrl,
+          (href || '').trim() || null,
+          !!is_active,
+        ]
     );
 
     const article = rows[0];
 
     await logAdminAction(
-      adminUserId,
-      'ADMIN_CREATE_EDUCATION_ARTICLE',
-      article.id,
-      { title: article.title },
-      req
+        adminUserId,
+        'ADMIN_CREATE_EDUCATION_ARTICLE',
+        article.id,
+        { title: article.title },
+        req
     );
 
     res.json(article);
@@ -1041,8 +980,6 @@ router.post('/education/articles', educationUpload.single('file'), async (req, r
   }
 });
 
-
-// PUT /api/admin/education/articles/:id
 // PUT /api/admin/education/articles/:id
 router.put('/education/articles/:id', educationUpload.single('file'), async (req, res) => {
   try {
@@ -1050,8 +987,8 @@ router.put('/education/articles/:id', educationUpload.single('file'), async (req
     const { id } = req.params;
 
     const existing = await dbPool.query(
-      'SELECT * FROM public.education_articles WHERE id = $1',
-      [id]
+        'SELECT * FROM public.education_articles WHERE id = $1',
+        [id]
     );
     if (!existing.rows.length) {
       return res.status(404).json({ error: 'Article not found' });
@@ -1069,28 +1006,26 @@ router.put('/education/articles/:id', educationUpload.single('file'), async (req
 
     const tagsArray = parseTags(tags);
     const minutesValue =
-      minutes === '' || minutes === null || minutes === undefined
-        ? null
-        : Number(minutes);
+        minutes === '' || minutes === null || minutes === undefined
+            ? null
+            : Number(minutes);
 
-    // ✅ Handle possible new uploaded file
+    // Handle possible new uploaded file
     const uploadedUrl = req.file
-      ? `/uploads/education/${req.file.filename}`
-      : null;
+        ? `/uploads/education/${req.file.filename}`
+        : null;
 
     const current = existing.rows[0];
 
     let newCoverUrl = current.cover_url;
     if (uploadedUrl !== null) {
-      // New file replaces whatever was there before
       newCoverUrl = uploadedUrl;
     } else if (cover_url !== undefined) {
-      // Explicitly set via body; empty string clears it
       newCoverUrl = cover_url || null;
     }
 
     const { rows } = await dbPool.query(
-      `
+        `
         UPDATE public.education_articles
         SET
           title      = $2,
@@ -1114,26 +1049,26 @@ router.put('/education/articles/:id', educationUpload.single('file'), async (req
           created_at,
           updated_at
       `,
-      [
-        id,
-        title || current.title,
-        summary !== undefined ? summary : current.summary,
-        Number.isFinite(minutesValue) ? minutesValue : current.minutes,
-        tagsArray.length ? tagsArray : current.tags || [],
-        newCoverUrl,
-        href !== undefined ? href : current.href,
-        typeof is_active === 'boolean' ? is_active : current.is_active,
-      ]
+        [
+          id,
+          title || current.title,
+          summary !== undefined ? summary : current.summary,
+          Number.isFinite(minutesValue) ? minutesValue : current.minutes,
+          tagsArray.length ? tagsArray : current.tags || [],
+          newCoverUrl,
+          href !== undefined ? href : current.href,
+          typeof is_active === 'boolean' ? is_active : current.is_active,
+        ]
     );
 
     const article = rows[0];
 
     await logAdminAction(
-      adminUserId,
-      'ADMIN_UPDATE_EDUCATION_ARTICLE',
-      article.id,
-      { title: article.title },
-      req
+        adminUserId,
+        'ADMIN_UPDATE_EDUCATION_ARTICLE',
+        article.id,
+        { title: article.title },
+        req
     );
 
     res.json(article);
@@ -1150,8 +1085,8 @@ router.delete('/education/articles/:id', async (req, res) => {
     const { id } = req.params;
 
     const result = await dbPool.query(
-      'DELETE FROM public.education_articles WHERE id = $1 RETURNING id, title',
-      [id]
+        'DELETE FROM public.education_articles WHERE id = $1 RETURNING id, title',
+        [id]
     );
 
     if (!result.rowCount) {
@@ -1161,11 +1096,11 @@ router.delete('/education/articles/:id', async (req, res) => {
     const deleted = result.rows[0];
 
     await logAdminAction(
-      adminUserId,
-      'ADMIN_DELETE_EDUCATION_ARTICLE',
-      deleted.id,
-      { title: deleted.title },
-      req
+        adminUserId,
+        'ADMIN_DELETE_EDUCATION_ARTICLE',
+        deleted.id,
+        { title: deleted.title },
+        req
     );
 
     res.status(204).end();
@@ -1183,7 +1118,7 @@ router.get('/education/videos', async (req, res) => {
     const adminUserId = req.adminUser.id;
 
     const { rows } = await dbPool.query(
-      `
+        `
         SELECT
           id,
           title,
@@ -1199,11 +1134,11 @@ router.get('/education/videos', async (req, res) => {
     );
 
     await logAdminAction(
-      adminUserId,
-      'ADMIN_LIST_EDUCATION_VIDEOS',
-      null,
-      {},
-      req
+        adminUserId,
+        'ADMIN_LIST_EDUCATION_VIDEOS',
+        null,
+        {},
+        req
     );
 
     res.json({ videos: rows });
@@ -1233,7 +1168,7 @@ router.post('/education/videos', async (req, res) => {
     const tagsArray = parseTags(tags);
 
     const { rows } = await dbPool.query(
-      `
+        `
         INSERT INTO public.education_videos
           (title, duration, tags, thumb_url, href, is_active)
         VALUES ($1, $2, $3, $4, $5, $6)
@@ -1247,24 +1182,24 @@ router.post('/education/videos', async (req, res) => {
           is_active,
           created_at
       `,
-      [
-        title.trim(),
-        (duration || '').trim() || null,
-        tagsArray,
-        (thumb_url || '').trim() || null,
-        (href || '').trim() || null,
-        !!is_active,
-      ]
+        [
+          title.trim(),
+          (duration || '').trim() || null,
+          tagsArray,
+          (thumb_url || '').trim() || null,
+          (href || '').trim() || null,
+          !!is_active,
+        ]
     );
 
     const video = rows[0];
 
     await logAdminAction(
-      adminUserId,
-      'ADMIN_CREATE_EDUCATION_VIDEO',
-      video.id,
-      { title: video.title },
-      req
+        adminUserId,
+        'ADMIN_CREATE_EDUCATION_VIDEO',
+        video.id,
+        { title: video.title },
+        req
     );
 
     res.json(video);
@@ -1281,8 +1216,8 @@ router.put('/education/videos/:id', async (req, res) => {
     const { id } = req.params;
 
     const existing = await dbPool.query(
-      'SELECT * FROM public.education_videos WHERE id = $1',
-      [id]
+        'SELECT * FROM public.education_videos WHERE id = $1',
+        [id]
     );
     if (!existing.rows.length) {
       return res.status(404).json({ error: 'Video not found' });
@@ -1300,7 +1235,7 @@ router.put('/education/videos/:id', async (req, res) => {
     const tagsArray = parseTags(tags);
 
     const { rows } = await dbPool.query(
-      `
+        `
         UPDATE public.education_videos
         SET
           title      = $2,
@@ -1322,27 +1257,27 @@ router.put('/education/videos/:id', async (req, res) => {
           created_at,
           updated_at
       `,
-      [
-        id,
-        title || existing.rows[0].title,
-        duration !== undefined ? duration : existing.rows[0].duration,
-        tagsArray.length ? tagsArray : existing.rows[0].tags || [],
-        thumb_url !== undefined ? thumb_url : existing.rows[0].thumb_url,
-        href !== undefined ? href : existing.rows[0].href,
-        typeof is_active === 'boolean'
-          ? is_active
-          : existing.rows[0].is_active,
-      ]
+        [
+          id,
+          title || existing.rows[0].title,
+          duration !== undefined ? duration : existing.rows[0].duration,
+          tagsArray.length ? tagsArray : existing.rows[0].tags || [],
+          thumb_url !== undefined ? thumb_url : existing.rows[0].thumb_url,
+          href !== undefined ? href : existing.rows[0].href,
+          typeof is_active === 'boolean'
+              ? is_active
+              : existing.rows[0].is_active,
+        ]
     );
 
     const video = rows[0];
 
     await logAdminAction(
-      adminUserId,
-      'ADMIN_UPDATE_EDUCATION_VIDEO',
-      video.id,
-      { title: video.title },
-      req
+        adminUserId,
+        'ADMIN_UPDATE_EDUCATION_VIDEO',
+        video.id,
+        { title: video.title },
+        req
     );
 
     res.json(video);
@@ -1359,8 +1294,8 @@ router.delete('/education/videos/:id', async (req, res) => {
     const { id } = req.params;
 
     const result = await dbPool.query(
-      'DELETE FROM public.education_videos WHERE id = $1 RETURNING id, title',
-      [id]
+        'DELETE FROM public.education_videos WHERE id = $1 RETURNING id, title',
+        [id]
     );
 
     if (!result.rowCount) {
@@ -1370,11 +1305,11 @@ router.delete('/education/videos/:id', async (req, res) => {
     const deleted = result.rows[0];
 
     await logAdminAction(
-      adminUserId,
-      'ADMIN_DELETE_EDUCATION_VIDEO',
-      deleted.id,
-      { title: deleted.title },
-      req
+        adminUserId,
+        'ADMIN_DELETE_EDUCATION_VIDEO',
+        deleted.id,
+        { title: deleted.title },
+        req
     );
 
     res.status(204).end();
@@ -1383,6 +1318,7 @@ router.delete('/education/videos/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to delete video.' });
   }
 });
+
 // -------------------------------------
 // USERS ROUTES
 // -------------------------------------
@@ -1390,7 +1326,7 @@ router.get('/users', async (req, res) => {
   try {
     const adminUserId = req.adminUser.id;
     const { page = 1, limit = 10, search = '', role = '', status = '' } =
-      req.query;
+        req.query;
 
     const pageNum = toInt(page, 1);
     const lim = toInt(limit, 10);
@@ -1403,7 +1339,7 @@ router.get('/users', async (req, res) => {
     if (search) {
       i++;
       where.push(
-        `(email ILIKE $${i} OR first_name ILIKE $${i} OR last_name ILIKE $${i} OR name ILIKE $${i})`
+          `(email ILIKE $${i} OR first_name ILIKE $${i} OR last_name ILIKE $${i} OR name ILIKE $${i})`
       );
       params.push(`%${search}%`);
     }
@@ -1460,9 +1396,8 @@ router.get('/users', async (req, res) => {
       OFFSET $${params.length + 2}
     `;
 
-
     const countSql = `SELECT COUNT(*) FROM public.users WHERE ${where.join(
-      ' AND '
+        ' AND '
     )}`;
 
     const [usersResult, countResult] = await Promise.all([
@@ -1474,11 +1409,11 @@ router.get('/users', async (req, res) => {
     const totalPages = Math.ceil(totalUsers / lim);
 
     await logAdminAction(
-      adminUserId,
-      'VIEW_USERS_LIST',
-      null,
-      { page: pageNum, limit: lim, search, role, status },
-      req
+        adminUserId,
+        'VIEW_USERS_LIST',
+        null,
+        { page: pageNum, limit: lim, search, role, status },
+        req
     );
 
     res.json({
@@ -1503,7 +1438,7 @@ router.get('/users/:userId', async (req, res) => {
     const { userId } = req.params;
 
     const userResult = await dbPool.query(
-      `SELECT
+        `SELECT
          u.id, u.auth0_id, u.email, u.first_name, u.last_name, u.name, u.role,
          u.is_active, u.is_admin, u.auth_provider, u.created_at, u.updated_at,
          um.id as membership_id, um.plan_id, um.status as membership_status,
@@ -1516,7 +1451,7 @@ router.get('/users/:userId', async (req, res) => {
        LEFT JOIN public.appointments a ON u.id = a.user_id
        WHERE u.id = $1
        GROUP BY u.id, um.id, mp.name`,
-      [userId]
+        [userId]
     );
 
     if (userResult.rows.length === 0) {
@@ -1524,23 +1459,23 @@ router.get('/users/:userId', async (req, res) => {
     }
 
     const appointmentsResult = await dbPool.query(
-      `SELECT id, service_type, appointment_date, status, created_at
+        `SELECT id, service_type, appointment_date, status, created_at
        FROM public.appointments
        WHERE user_id = $1
        ORDER BY appointment_date DESC
        LIMIT 10`,
-      [userId]
+        [userId]
     );
 
     const user = userResult.rows[0];
     user.appointments = appointmentsResult.rows;
 
     await logAdminAction(
-      adminUserId,
-      'VIEW_USER_DETAILS',
-      userId,
-      {},
-      req
+        adminUserId,
+        'VIEW_USER_DETAILS',
+        userId,
+        {},
+        req
     );
     res.json({ user });
   } catch (error) {
@@ -1572,8 +1507,8 @@ router.put('/users/:userId', async (req, res) => {
     }
 
     const existingUser = await dbPool.query(
-      'SELECT id, auth0_id, email, is_active, role, is_admin FROM public.users WHERE id = $1',
-      [userId]
+        'SELECT id, auth0_id, email, is_active, role, is_admin FROM public.users WHERE id = $1',
+        [userId]
     );
 
     if (existingUser.rows.length === 0) {
@@ -1595,7 +1530,7 @@ router.put('/users/:userId', async (req, res) => {
 
     let finalRole = role || targetUser.role;
     let finalIsActive =
-      is_active !== undefined ? is_active : targetUser.is_active;
+        is_active !== undefined ? is_active : targetUser.is_active;
 
     if (finalRole === 'Member' && !finalIsActive) {
       finalRole = 'User';
@@ -1646,45 +1581,45 @@ router.put('/users/:userId', async (req, res) => {
         });
         auth0RoleSyncResult = true;
       } catch (auth0Error) {
-        console.error('⚠️ Auth0 sync failed:', auth0Error.message);
+        console.error('Auth0 sync failed:', auth0Error.message);
       }
     }
 
     await logAdminAction(
-      adminUserId,
-      'UPDATE_USER',
-      userId,
-      {
-        first_name,
-        last_name,
-        name,
-        email,
-        role: finalRole,
-        is_active: finalIsActive,
-        is_admin,
-        auth0_sync: !!auth0SyncResult,
-        auth0_role_sync: !!auth0RoleSyncResult,
-        auth0_id: targetUser.auth0_id,
-        membership_synced: true,
-      },
-      req
+        adminUserId,
+        'UPDATE_USER',
+        userId,
+        {
+          first_name,
+          last_name,
+          name,
+          email,
+          role: finalRole,
+          is_active: finalIsActive,
+          is_admin,
+          auth0_sync: !!auth0SyncResult,
+          auth0_role_sync: !!auth0RoleSyncResult,
+          auth0_id: targetUser.auth0_id,
+          membership_synced: true,
+        },
+        req
     );
 
     res.json({
       message:
-        'User updated successfully' +
-        (auth0SyncResult ? ' (Auth0 synced)' : ' (Auth0 not synced)'),
+          'User updated successfully' +
+          (auth0SyncResult ? ' (Auth0 synced)' : ' (Auth0 not synced)'),
       user: updatedUser,
       auth0_synced: !!auth0SyncResult,
       auth0_role_synced: !!auth0RoleSyncResult,
       auth0_id_present: !!targetUser.auth0_id,
       role_adjusted:
-        finalRole !== role
-          ? 'Role adjusted from Member to User because user is inactive'
-          : null,
+          finalRole !== role
+              ? 'Role adjusted from Member to User because user is inactive'
+              : null,
     });
   } catch (error) {
-    console.error('❌ Error updating user:', error);
+    console.error('Error updating user:', error);
 
     if (error.code === '23505') {
       return res.status(400).json({
@@ -1717,8 +1652,8 @@ router.patch('/users/:userId/role', async (req, res) => {
     }
 
     const userResult = await dbPool.query(
-      'SELECT auth0_id, is_active, is_admin, role FROM public.users WHERE id = $1',
-      [userId]
+        'SELECT auth0_id, is_active, is_admin, role FROM public.users WHERE id = $1',
+        [userId]
     );
 
     if (!userResult.rows.length) {
@@ -1744,8 +1679,8 @@ router.patch('/users/:userId/role', async (req, res) => {
     await syncMembershipWithRole(userId, role, targetUser.is_active);
 
     const result = await dbPool.query(
-      'UPDATE public.users SET role = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
-      [role, userId]
+        'UPDATE public.users SET role = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+        [role, userId]
     );
 
     const updatedUser = result.rows[0];
@@ -1758,21 +1693,21 @@ router.patch('/users/:userId/role', async (req, res) => {
           is_admin: targetUser.is_admin,
         });
       } catch (auth0Error) {
-        console.error('⚠️ Auth0 sync failed for role update:', auth0Error.message);
+        console.error('Auth0 sync failed for role update:', auth0Error.message);
       }
     }
 
     await logAdminAction(
-      adminUserId,
-      'UPDATE_USER_ROLE',
-      userId,
-      {
-        role,
-        previous_role: targetUser.role,
-        new_role: updatedUser.role,
-        membership_synced: true,
-      },
-      req
+        adminUserId,
+        'UPDATE_USER_ROLE',
+        userId,
+        {
+          role,
+          previous_role: targetUser.role,
+          new_role: updatedUser.role,
+          membership_synced: true,
+        },
+        req
     );
 
     res.json({
@@ -1793,8 +1728,8 @@ router.patch('/users/:userId/status', async (req, res) => {
     const { is_active } = req.body;
 
     const userResult = await dbPool.query(
-      'SELECT auth0_id, is_active as current_active, role, is_admin FROM public.users WHERE id = $1',
-      [userId]
+        'SELECT auth0_id, is_active as current_active, role, is_admin FROM public.users WHERE id = $1',
+        [userId]
     );
 
     if (!userResult.rows.length) {
@@ -1821,8 +1756,8 @@ router.patch('/users/:userId/status', async (req, res) => {
     await syncMembershipWithRole(userId, finalRole, is_active);
 
     const result = await dbPool.query(
-      'UPDATE public.users SET is_active = $1, role = $2, updated_at = NOW() WHERE id = $3 RETURNING *',
-      [!!is_active, finalRole, userId]
+        'UPDATE public.users SET is_active = $1, role = $2, updated_at = NOW() WHERE id = $3 RETURNING *',
+        [!!is_active, finalRole, userId]
     );
 
     const updatedUser = result.rows[0];
@@ -1835,22 +1770,22 @@ router.patch('/users/:userId/status', async (req, res) => {
           is_admin: targetUser.is_admin,
         });
       } catch (auth0Error) {
-        console.error('⚠️ Auth0 sync failed for status update:', auth0Error.message);
+        console.error('Auth0 sync failed for status update:', auth0Error.message);
       }
     }
 
     await logAdminAction(
-      adminUserId,
-      'UPDATE_USER_STATUS',
-      userId,
-      {
-        is_active: !!is_active,
-        previous_status: targetUser.current_active,
-        new_status: updatedUser.is_active,
-        role_adjustment: roleAdjustment,
-        membership_synced: true,
-      },
-      req
+        adminUserId,
+        'UPDATE_USER_STATUS',
+        userId,
+        {
+          is_active: !!is_active,
+          previous_status: targetUser.current_active,
+          new_status: updatedUser.is_active,
+          role_adjustment: roleAdjustment,
+          membership_synced: true,
+        },
+        req
     );
 
     res.json({
@@ -1871,8 +1806,8 @@ router.delete('/users/:userId', async (req, res) => {
     const { userId } = req.params;
 
     const existingUser = await dbPool.query(
-      'SELECT id, email, auth0_id FROM public.users WHERE id = $1',
-      [userId]
+        'SELECT id, email, auth0_id FROM public.users WHERE id = $1',
+        [userId]
     );
 
     if (existingUser.rows.length === 0) {
@@ -1921,7 +1856,7 @@ router.get('/appointments', async (req, res) => {
   try {
     const adminUserId = req.adminUser.id;
     const { page = 1, limit = 10, status = '', date_from = '', date_to = '' } =
-      req.query;
+        req.query;
 
     const pageNum = toInt(page, 1);
     const lim = toInt(limit, 10);
@@ -1960,7 +1895,7 @@ router.get('/appointments', async (req, res) => {
       LIMIT $${i + 1} OFFSET $${i + 2}
     `;
     const countQuery = `SELECT COUNT(*) FROM public.appointments a WHERE ${where.join(
-      ' AND '
+        ' AND '
     )}`;
 
     const [appointmentsResult, countResult] = await Promise.all([
@@ -1972,11 +1907,11 @@ router.get('/appointments', async (req, res) => {
     const totalPages = Math.ceil(totalAppointments / lim);
 
     await logAdminAction(
-      adminUserId,
-      'VIEW_APPOINTMENTS_LIST',
-      null,
-      { page: pageNum, limit: lim, status, date_from, date_to },
-      req
+        adminUserId,
+        'VIEW_APPOINTMENTS_LIST',
+        null,
+        { page: pageNum, limit: lim, status, date_from, date_to },
+        req
     );
 
     res.json({
@@ -2007,21 +1942,21 @@ router.patch('/appointments/:appointmentId/status', async (req, res) => {
     }
 
     const result = await dbPool.query(
-      `UPDATE public.appointments
+        `UPDATE public.appointments
        SET status = $1, updated_at = NOW()
        WHERE id = $2 RETURNING *`,
-      [status, appointmentId]
+        [status, appointmentId]
     );
     if (!result.rows.length) {
       return res.status(404).json({ error: 'Appointment not found' });
     }
 
     await logAdminAction(
-      adminUserId,
-      'UPDATE_APPOINTMENT_STATUS',
-      appointmentId,
-      { status },
-      req
+        adminUserId,
+        'UPDATE_APPOINTMENT_STATUS',
+        appointmentId,
+        { status },
+        req
     );
     res.json({ appointment: result.rows[0] });
   } catch (error) {
@@ -2091,11 +2026,11 @@ router.get('/products', async (req, res) => {
     const total = Number(countResult.rows[0].count) || 0;
 
     await logAdminAction(
-      adminUserId,
-      'ADMIN_LIST_PRODUCTS',
-      null,
-      { search, category, page: pageNum, limit: lim },
-      req
+        adminUserId,
+        'ADMIN_LIST_PRODUCTS',
+        null,
+        { search, category, page: pageNum, limit: lim },
+        req
     );
 
     res.json({
@@ -2165,11 +2100,11 @@ router.post('/products', async (req, res) => {
     const product = rows[0];
 
     await logAdminAction(
-      adminUserId,
-      'ADMIN_CREATE_PRODUCT',
-      product.id,
-      { name: product.name, price: product.price },
-      req
+        adminUserId,
+        'ADMIN_CREATE_PRODUCT',
+        product.id,
+        { name: product.name, price: product.price },
+        req
     );
 
     res.status(201).json(product);
@@ -2184,8 +2119,8 @@ router.post('/products', async (req, res) => {
     }
 
     res
-      .status(500)
-      .json({ error: 'Failed to create product', message: e.message });
+    .status(500)
+    .json({ error: 'Failed to create product', message: e.message });
   }
 });
 
@@ -2208,8 +2143,8 @@ router.put('/products/:id', async (req, res) => {
     } = req.body;
 
     const existingResult = await dbPool.query(
-      'SELECT * FROM public.products WHERE id = $1',
-      [id]
+        'SELECT * FROM public.products WHERE id = $1',
+        [id]
     );
 
     if (!existingResult.rows.length) {
@@ -2227,13 +2162,13 @@ router.put('/products/:id', async (req, res) => {
     }
 
     const priceNumber =
-      price !== undefined && price !== null && price !== ''
-        ? Number(price)
-        : null;
+        price !== undefined && price !== null && price !== ''
+            ? Number(price)
+            : null;
 
     const hasCategory = Object.prototype.hasOwnProperty.call(
-      req.body,
-      'category_id'
+        req.body,
+        'category_id'
     );
     let categoryValue = existing.category_id;
 
@@ -2275,15 +2210,15 @@ router.put('/products/:id', async (req, res) => {
     const product = rows[0];
 
     await logAdminAction(
-      adminUserId,
-      'ADMIN_UPDATE_PRODUCT',
-      id,
-      {
-        name: product.name,
-        price: product.price,
-        is_active: product.is_active,
-      },
-      req
+        adminUserId,
+        'ADMIN_UPDATE_PRODUCT',
+        id,
+        {
+          name: product.name,
+          price: product.price,
+          is_active: product.is_active,
+        },
+        req
     );
 
     res.json(product);
@@ -2298,8 +2233,8 @@ router.put('/products/:id', async (req, res) => {
     }
 
     res
-      .status(500)
-      .json({ error: 'Failed to update product', message: e.message });
+    .status(500)
+    .json({ error: 'Failed to update product', message: e.message });
   }
 });
 
@@ -2312,8 +2247,8 @@ router.delete('/products/:id', async (req, res) => {
     }
 
     const result = await dbPool.query(
-      'DELETE FROM public.products WHERE id = $1 RETURNING id, name',
-      [id]
+        'DELETE FROM public.products WHERE id = $1 RETURNING id, name',
+        [id]
     );
 
     if (!result.rowCount) {
@@ -2323,11 +2258,11 @@ router.delete('/products/:id', async (req, res) => {
     const deleted = result.rows[0];
 
     await logAdminAction(
-      adminUserId,
-      'ADMIN_DELETE_PRODUCT',
-      deleted.id,
-      { name: deleted.name },
-      req
+        adminUserId,
+        'ADMIN_DELETE_PRODUCT',
+        deleted.id,
+        { name: deleted.name },
+        req
     );
 
     res.json({
@@ -2338,8 +2273,8 @@ router.delete('/products/:id', async (req, res) => {
   } catch (e) {
     console.error('admin delete product error:', e);
     res
-      .status(500)
-      .json({ error: 'Failed to delete product', message: e.message });
+    .status(500)
+    .json({ error: 'Failed to delete product', message: e.message });
   }
 });
 
@@ -2373,7 +2308,7 @@ router.get('/events', async (req, res) => {
     }
 
     const { rows } = await dbPool.query(
-      `
+        `
         SELECT
           id,
           title,
@@ -2393,11 +2328,11 @@ router.get('/events', async (req, res) => {
     );
 
     await logAdminAction(
-      adminUserId,
-      'ADMIN_LIST_EVENTS',
-      null,
-      { status: status || 'all' },
-      req
+        adminUserId,
+        'ADMIN_LIST_EVENTS',
+        null,
+        { status: status || 'all' },
+        req
     );
 
     res.json({ events: rows });
@@ -2433,12 +2368,12 @@ router.post('/events', eventsUpload.single('file'), async (req, res) => {
     const isPublished = status === 'published';
 
     const uploadedUrl = req.file
-      ? `/uploads/events/${req.file.filename}`
-      : null;
+        ? `/uploads/events/${req.file.filename}`
+        : null;
     const finalImageUrl = uploadedUrl || imageUrl || null;
 
     const { rows } = await dbPool.query(
-      `
+        `
         INSERT INTO public.events
           (title, description, location, start_at, end_at, is_published, image_url)
         VALUES
@@ -2453,15 +2388,15 @@ router.post('/events', eventsUpload.single('file'), async (req, res) => {
           is_published,
           image_url  AS "imageUrl"
       `,
-      [
-        title,
-        description || null,
-        location || null,
-        startAt,
-        endAt,
-        isPublished,
-        finalImageUrl,
-      ]
+        [
+          title,
+          description || null,
+          location || null,
+          startAt,
+          endAt,
+          isPublished,
+          finalImageUrl,
+        ]
     );
 
     const row = rows[0];
@@ -2478,11 +2413,11 @@ router.post('/events', eventsUpload.single('file'), async (req, res) => {
 
     if (adminUserId) {
       await logAdminAction(
-        adminUserId,
-        'ADMIN_CREATE_EVENT',
-        event.id,
-        { status: event.status },
-        req
+          adminUserId,
+          'ADMIN_CREATE_EVENT',
+          event.id,
+          { status: event.status },
+          req
       );
     }
 
@@ -2504,8 +2439,8 @@ router.put('/events/:id', eventsUpload.single('file'), async (req, res) => {
     }
 
     const existingResult = await dbPool.query(
-      'SELECT * FROM public.events WHERE id = $1',
-      [eventId]
+        'SELECT * FROM public.events WHERE id = $1',
+        [eventId]
     );
     if (!existingResult.rows.length) {
       return res.status(404).json({ error: 'Event not found' });
@@ -2528,27 +2463,27 @@ router.put('/events/:id', eventsUpload.single('file'), async (req, res) => {
     const newDescription = description ?? existing.description;
     const newLocation = location ?? existing.location;
     const newStartAt =
-      startTime !== undefined ? normalizeDate(startTime) : existing.start_at;
+        startTime !== undefined ? normalizeDate(startTime) : existing.start_at;
     const newEndAt =
-      endTime !== undefined ? normalizeDate(endTime) : existing.end_at;
+        endTime !== undefined ? normalizeDate(endTime) : existing.end_at;
 
     let newIsPublished = existing.is_published;
     if (status === 'published') newIsPublished = true;
     if (status === 'draft') newIsPublished = false;
 
     const uploadedUrl = req.file
-      ? `/uploads/events/${req.file.filename}`
-      : null;
+        ? `/uploads/events/${req.file.filename}`
+        : null;
 
     const newImageUrl =
-      uploadedUrl !== null
-        ? uploadedUrl
-        : imageUrl !== undefined
-        ? imageUrl || null
-        : existing.image_url;
+        uploadedUrl !== null
+            ? uploadedUrl
+            : imageUrl !== undefined
+                ? imageUrl || null
+                : existing.image_url;
 
     const { rows } = await dbPool.query(
-      `
+        `
         UPDATE public.events
         SET
           title        = $2,
@@ -2570,16 +2505,16 @@ router.put('/events/:id', eventsUpload.single('file'), async (req, res) => {
           is_published,
           image_url  AS "imageUrl"
       `,
-      [
-        eventId,
-        newTitle,
-        newDescription,
-        newLocation,
-        newStartAt,
-        newEndAt,
-        newIsPublished,
-        newImageUrl,
-      ]
+        [
+          eventId,
+          newTitle,
+          newDescription,
+          newLocation,
+          newStartAt,
+          newEndAt,
+          newIsPublished,
+          newImageUrl,
+        ]
     );
 
     const row = rows[0];
@@ -2596,11 +2531,11 @@ router.put('/events/:id', eventsUpload.single('file'), async (req, res) => {
 
     if (adminUserId) {
       await logAdminAction(
-        adminUserId,
-        'ADMIN_UPDATE_EVENT',
-        event.id,
-        { status: event.status },
-        req
+          adminUserId,
+          'ADMIN_UPDATE_EVENT',
+          event.id,
+          { status: event.status },
+          req
       );
     }
 
@@ -2622,8 +2557,8 @@ router.delete('/events/:id', async (req, res) => {
     }
 
     const result = await dbPool.query(
-      'DELETE FROM public.events WHERE id = $1 RETURNING id, title',
-      [eventId]
+        'DELETE FROM public.events WHERE id = $1 RETURNING id, title',
+        [eventId]
     );
 
     if (!result.rowCount) {
@@ -2634,11 +2569,11 @@ router.delete('/events/:id', async (req, res) => {
 
     if (adminUserId) {
       await logAdminAction(
-        adminUserId,
-        'ADMIN_DELETE_EVENT',
-        deleted.id,
-        { title: deleted.title },
-        req
+          adminUserId,
+          'ADMIN_DELETE_EVENT',
+          deleted.id,
+          { title: deleted.title },
+          req
       );
     }
 
@@ -2685,11 +2620,11 @@ router.get('/audit-logs', async (req, res) => {
     const totalPages = Math.ceil(totalLogs / lim);
 
     await logAdminAction(
-      adminUserId,
-      'VIEW_AUDIT_LOGS',
-      null,
-      {},
-      req
+        adminUserId,
+        'VIEW_AUDIT_LOGS',
+        null,
+        {},
+        req
     );
 
     res.json({
