@@ -26,6 +26,6 @@ Maria Imperatrice
 1-npm install
 2-npm start
 
-#ER -Diagram
+# ER -Diagram
 <img width="2249" height="2186" alt="EmpowermedDatabase" src="https://github.com/user-attachments/assets/3884f69f-1aee-4468-88e8-4f0551d0de4c" />
 
